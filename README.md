@@ -73,7 +73,7 @@ adaremac/
    * Mở trình duyệt Web truy cập địa chỉ: **`http://192.168.4.1`**
    * *(Lưu ý: Nếu bạn muốn đổi sang nối qua Router Wi-Fi nhà bạn, chỉ cần đổi `#define USE_DIRECT_AP_MODE 0` ở dòng 36 và điền `WIFI_SSID` / `WIFI_PASS`).*
 4. **Cách chỉnh nét căng cho ống kính OV5640**:
-   * Trong code đã bật sẵn bộ xử lý ảnh phần cứng ISP của OV5640 (`Sharpness = +2`, `Contrast = +1`, `Lens Correction = ON`, `Raw GMA = ON`, `Denoise = ON`, `jpeg_quality = 8`).
+   * Trong code đã bật sẵn bộ xử lý ảnh phần cứng ISP của OV5640.
    * Nếu thấu kính OV5640 của bạn đang lấy nét ở khoảng cách xa/gần chưa khớp với vật thể trước mặt, bạn chỉ cần **vặn nhẹ vành ren nhựa đen ở đầu ống kính OV5640** khoảng $15^\circ - 30^\circ$ trong lúc nhìn màn hình Live Stream để lấy nét tiêu cự chuẩn xác 100%.
 
 ### Bước 4: Nạp mạch FPGA Sipeed Tang Nano 20K (Đảm bảo mát lạnh 100%)
