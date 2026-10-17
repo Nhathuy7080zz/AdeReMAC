@@ -21,8 +21,8 @@
 #include "esp_http_server.h"
 
 // Điền tên Wi-Fi và mật khẩu nếu muốn xem Live Stream trên trình duyệt (để trống "" nếu không cần):
-const char *WIFI_SSID = "";
-const char *WIFI_PASS = "";
+const char *WIFI_SSID = "Homy Home";
+const char *WIFI_PASS = "homy@linhtrung";
 
 // ---------------- SƠ ĐỒ 14 CHÂN CỐ ĐỊNH KHE FPC 24-PIN TRÊN MẠCH ESP32-S3 N16R8 CAM ------
 // LƯU Ý: Toàn bộ 14 chân này nằm ở Hàng Trái (Left Row). Tuyệt đối không cắm dây ngoài vào đây!
