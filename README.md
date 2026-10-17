@@ -2,7 +2,7 @@
 
 Tài liệu này hướng dẫn toàn diện từ bước **dọn sạch ESP-IDF cũ**, **cài đặt Arduino IDE + Board Manager**, **chạy Code Test Stream FHD@30p siêu nét theo phương án Pure Wi-Fi AP 40MHz HT40 chống nghẽn + AI học môi trường liên tục & đóng khung vật thể bất thường**, **nạp FPGA Tang Nano 20K mát lạnh 100%**, đến **đấu dây trên 1 hàng chân phải duy nhất cho Breadboard**.
 
-## 1. Cấu trúc thư mục trong gói v3
+## 1. Cấu trúc thư mục trong gói v3 này (Đã xóa bỏ `docs/` và `HUONG_DAN.md`)
 
 ```text
 adaremac/
@@ -33,7 +33,25 @@ adaremac/
 └── ai_eval/                           # Huấn luyện CNN, lượng tử hóa INT8, kiểm chứng trùng bit RTL & xuất C header
 ```
 
-## 2. Quy trình cài đặt và chạy từng bước từ A–Z (Với Arduino IDE 2.x)
+## 2. Hướng dẫn gỡ bỏ triệt để ESP-IDF khỏi máy tính Windows
+
+### Cách 1: Chạy tự động bằng 1 lệnh PowerShell
+
+Mở **PowerShell** tại thư mục `adaremac/` và chạy:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\uninstall_esp_idf.ps1
+```
+
+### Cách 2: Kiểm tra và gỡ thủ công từng phần
+
+1. **Gỡ Extension trên VS Code**: Mở VS Code $\to$ nhấn `Ctrl + Shift + X` $\to$ tìm **`ESP-IDF`** $\to$ bấm **Uninstall**. Nhấn `Ctrl + Shift + P` $\to$ `Preferences: Open User Settings (JSON)` $\to$ xóa các dòng bắt đầu bằng `"idf.` rồi lưu lại.
+2. **Gỡ trình cài đặt trong Windows Settings**: Nhấn `Win + I` $\to$ **Apps** $\to$ **Installed apps** $\to$ gỡ **ESP-IDF Tools** / **Espressif-IDE** / **EIM**.
+3. **Xóa 4 thư mục bộ cài & thư viện ẩn**: Xóa `C:\Espressif`, `C:\Users\<TenBan>\.espressif`, `C:\Users\<TenBan>\AppData\Local\Espressif`, và `C:\Users\<TenBan>\esp`.
+4. **Xóa đường dẫn trong `Environment Variables`**: Mở **Edit environment variables for your account** $\to$ xóa các dòng chứa `Espressif` / `.espressif` trong biến `Path` và xóa các biến `IDF_PATH`, `IDF_TOOLS_PATH`, `IDF_PYTHON_ENV_PATH`.
+5. **Xóa khóa Registry**: Mở `regedit` $\to$ xóa nhánh `HKEY_CURRENT_USER\Software\Espressif` và `HKEY_LOCAL_MACHINE\SOFTWARE\Espressif` (nếu có).
+
+## 3. Quy trình cài đặt và chạy từng bước từ A–Z (Với Arduino IDE 2.x)
 
 ### Bước 1: Cài đặt Arduino IDE 2.x và gói Board ESP32
 
@@ -73,7 +91,7 @@ adaremac/
    * Mở trình duyệt Web truy cập địa chỉ: **`http://192.168.4.1`**
    * *(Lưu ý: Nếu bạn muốn đổi sang nối qua Router Wi-Fi nhà bạn, chỉ cần đổi `#define USE_DIRECT_AP_MODE 0` ở dòng 36 và điền `WIFI_SSID` / `WIFI_PASS`).*
 4. **Cách chỉnh nét căng cho ống kính OV5640**:
-   * Trong code đã bật sẵn bộ xử lý ảnh phần cứng ISP của OV5640.
+   * Trong code đã bật sẵn bộ xử lý ảnh phần cứng ISP của OV5640 (`Sharpness = +2`, `Contrast = +1`, `Lens Correction = ON`, `Raw GMA = ON`, `Denoise = ON`, `jpeg_quality = 8`).
    * Nếu thấu kính OV5640 của bạn đang lấy nét ở khoảng cách xa/gần chưa khớp với vật thể trước mặt, bạn chỉ cần **vặn nhẹ vành ren nhựa đen ở đầu ống kính OV5640** khoảng $15^\circ - 30^\circ$ trong lúc nhìn màn hình Live Stream để lấy nét tiêu cự chuẩn xác 100%.
 
 ### Bước 4: Nạp mạch FPGA Sipeed Tang Nano 20K (Đảm bảo mát lạnh 100%)

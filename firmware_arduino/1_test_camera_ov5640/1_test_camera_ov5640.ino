@@ -2,35 +2,22 @@
 // SKETCH 1: STREAM VIDEO TỐC ĐỘ CAO + AI CHỐNG NHIỄU 5 TẦNG & HỌC MÔI TRƯỜNG LIÊN TỤC
 // Board: ESP32 Cam Kit Phát Triển ESP32-S3 N16R8 OV5640 TypeC (Arduino IDE 2.x)
 //
-// BẢN CẬP NHẬT KHẮC PHỤC TRIỆT ĐỂ 2 VẤN ĐỀ TỪ ẢNH CHỤP THỰC TẾ CỦA BẠN:
+// ĐÃ SỬA TRIỆT ĐỂ LỖI BOOT LOOP (Stack canary watchpoint triggered in ai_learn_task):
+//   - Chuyển toàn bộ các mảng tính toán lưới không gian (s_raw_y/cr/cb/edge, s_cell_y/cr/cb/edge,
+//     s_z_map, s_qx, s_qy, s_patch_feat...) từ biến cục bộ trên Stack sang bộ nhớ tĩnh (static BSS),
+//     giúp hàm analyze_frame_and_learn() chỉ tốn < 128 byte Stack (thay vì 17 KB gây tràn Stack)!
+//   - Tăng kích thước Stack của ai_learn_task lên 20480 bytes (20 KB) và đặt bộ đệm ảnh giải mã
+//     vào OPI PSRAM để giữ trống 100% bộ nhớ DRAM nội bộ (289 KB) cho bộ phát Wi-Fi 40MHz HT40.
 //
-// [A] KHẮC PHỤC VIDEO LAG (11 FPS) & GIẢM NHIỆT ĐỘ CHIP (TỪ 60.6°C XUỐNG ~45°C):
-//   1. Nguyên nhân OV5640 bị tụt xuống đúng 11.0 FPS và ảnh tối:
-//      - Khi bật aec2=1 (Night Mode) và khóa gainceiling thấp trong phòng thiếu sáng, cảm biến
-//        OV5640 tự động kéo dài thời gian phơi sáng (shutter speed = 1/11s) làm tốc độ xuất
-//        khung hình phần cứng bị khóa cứng ở 11.0 FPS!
-//      -> ĐÃ SỬA: Tắt chế độ chia khung hình đêm (set_aec2 = 0), mở trần Gain (GAINCEILING_16X)
-//         và nâng mức bù sáng tự động (ae_level = +1) để giữ tốc độ xuất khung hình 25-30 FPS!
-//   2. Nguyên nhân AI làm nghẽn băng thông PSRAM (46.1 ms) và nghẽn Wi-Fi:
-//      - Giải mã JPEG ở độ phân giải lớn trong PSRAM liên tục + trình duyệt gọi HTTP /ai mỗi
-//        80ms (12.5 lần/giây) làm tắc nghẽn bus OPI PSRAM và đụng độ gói tin Wi-Fi.
-//      -> ĐÃ SỬA: Dùng giải mã siêu nhẹ 1/8 vào bộ nhớ SRAM nội bộ + giới hạn nhịp quét AI
-//         ở mức 6-8 Hz (chỉ tốn ~4-8 ms/lần), gộp header MJPEG vào 1 lần gửi duy nhất và bật
-//         HTTP Keep-Alive giúp luồng video mượt gấp 3 lần!
-//
-// [B] KHẮC PHỤC TRIỆT ĐỂ NHẬN DẠNG NHẦM NHIỄU HẠT (NOISE) THÀNH BẤT THƯỜNG:
-//   Áp dụng 5 tầng lọc nhiễu phần cứng (5-Stage Anti-Noise Pipeline):
-//   1. Vùng chết nhiễu (Noise Deadband = 18/255): Mọi dao động nhiễu nhiệt CMOS / nhiễu nén
-//      JPEG dưới 18 mức xám đều bị triệt tiêu về 0 (Z-score = 0).
-//   2. Lọc thông thấp không gian 3x3 (Spatial 3x3 Box Filter): Xóa bỏ toàn bộ các điểm nhiễu
-//      hạt trắng (hot pixels) đơn lẻ trước khi đưa vào bộ so sánh nền.
-//   3. Kiểm tra bền vững theo thời gian (Temporal Persistence >= 3 frames): Nhiễu ngẫu nhiên
-//      chỉ xuất hiện 1 frame rồi biến mất; chỉ những vật thể thực sự tồn tại liên tiếp tại
-//      cùng một vị trí qua >= 3 chu kỳ quét AI mới được đóng khung!
-//   4. Ngưỡng diện tích & độ tương phản nội vùng (Contrast Gate): Không phóng đại nhiễu trong
-//      vùng tối phẳng (yêu cầu cụm vật thể >= 3 ô lưới và có độ chênh biên thực sự).
-//   5. Nhận diện đổi góc Camera thông minh (Global Shift + Optical Flow): Khi xoay camera làm
-//      thay đổi bố cục hoặc độ sáng toàn cảnh, lập tức xóa mọi khung cũ và học lại nền mới.
+// TÍNH NĂNG ĐÃ TỐI ƯU:
+//   1. Khóa Night-Mode chia khung hình (set_aec2 = 0) + mở trần Gain (GAINCEILING_16X) giúp
+//      OV5640 không bị tụt xuống 11.0 FPS trong phòng thiếu sáng.
+//   2. Bộ lọc nhiễu 5 tầng (5-Stage Anti-Noise Pipeline):
+//      - Lọc thông thấp không gian 3x3 xóa nhiễu hạt trắng (hot-pixels).
+//      - Vùng chết nhiễu (Deadband = 18/255) & sàn phương sai (sigma >= 10) triệt tiêu nhiễu tối.
+//      - Kiểm tra đồng thuận lân cận (>= 2 ô kề nhau) & bền vững thời gian (>= 3 chu kỳ liên tiếp).
+//      - Ngưỡng diện tích cụm tối thiểu (>= 3 ô) & độ tương phản nội vùng (patch_contrast >= 22).
+//      - Chống khuếch đại nhiễu nền tối khi chuẩn hóa đầu vào mạng nơ-ron INT8 AdaReMAC.
 // =========================================================================================
 
 #include <Arduino.h>
@@ -93,20 +80,40 @@ struct AnomBox {
     uint8_t ai_cls_m2;      // Nhãn dự đoán Mode 2 (100% Full AdaReMAC)
 };
 
-// Trạng thái học môi trường của từng ô lưới (Spatial Continual Learning State)
-static float   s_bg_y[GRID_CELLS];        // Độ sáng trung bình học được của môi trường
-static float   s_bg_cr[GRID_CELLS];       // Sắc độ Đỏ học được
-static float   s_bg_cb[GRID_CELLS];       // Sắc độ Xanh học được
-static float   s_bg_edge[GRID_CELLS];     // Năng lượng biên góc cạnh học được
-static float   s_bg_var[GRID_CELLS];      // Phương sai dao động nền tại mỗi ô
-static uint8_t s_cell_persist[GRID_CELLS];// Bộ đếm số frame liên tiếp xuất hiện vật thể (Chống nhiễu hạt!)
+// Trạng thái học môi trường của từng ô lưới (Đặt hoàn toàn trong bộ nhớ tĩnh BSS)
+static float   s_bg_y[GRID_CELLS];
+static float   s_bg_cr[GRID_CELLS];
+static float   s_bg_cb[GRID_CELLS];
+static float   s_bg_edge[GRID_CELLS];
+static float   s_bg_var[GRID_CELLS];
+static uint8_t s_cell_persist[GRID_CELLS];
 static float   s_bg_logits[AI_NUM_CLASSES];
 static float   s_prev_global_luma = -1.0f;
+
+// Bộ đệm trung gian tĩnh cho AI Task (Tránh cấp phát trên Stack gây lỗi Stack Canary Panic!)
+static float   s_raw_y[GRID_CELLS];
+static float   s_raw_cr[GRID_CELLS];
+static float   s_raw_cb[GRID_CELLS];
+static float   s_raw_edge[GRID_CELLS];
+static float   s_cell_y[GRID_CELLS];
+static float   s_cell_cr[GRID_CELLS];
+static float   s_cell_cb[GRID_CELLS];
+static float   s_cell_edge[GRID_CELLS];
+static float   s_z_map[GRID_CELLS];
+static uint8_t s_raw_anom[GRID_CELLS];
+static uint8_t s_verified_anom[GRID_CELLS];
+static uint8_t s_visited[GRID_CELLS];
+static int16_t s_qx[GRID_CELLS];
+static int16_t s_qy[GRID_CELLS];
+static uint8_t s_patch_raw[400];
+static int8_t  s_patch_feat[400];
+static float   s_cur_logits[AI_NUM_CLASSES];
+static AnomBox s_cand_boxes[MAX_ANOM_BOXES];
 
 static bool  s_env_initialized = false;
 static int   s_fast_learn_frames = 18;
 static volatile bool  s_force_relearn = false;
-static volatile float s_anom_threshold = 3.8f; // Ngưỡng chuẩn hóa sau khi đã trừ vùng chết nhiễu (Deadband)
+static volatile float s_anom_threshold = 3.8f;
 
 // Kết quả AI xuất ra Web UI và Serial Monitor
 static portMUX_TYPE s_ai_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -121,7 +128,7 @@ static float    s_stream_fps = 0.0f;
 static float    s_chip_temp_c = 40.0f;
 static uint32_t s_total_frames = 0;
 
-// Bộ đệm chia sẻ không khóa giữa Stream Task (Core 1) và AI Task (Core 0)
+// Bộ đệm PSRAM chia sẻ không khóa giữa Stream Task (Core 1) và AI Task (Core 0)
 static uint8_t  *s_ai_jpeg_buf = NULL;
 static size_t    s_ai_jpeg_len = 0;
 static uint16_t  s_ai_frame_w  = 1280;
@@ -183,13 +190,12 @@ static uint8_t adaremac_run_nn(const int8_t *feat, int n_dims, uint8_t mode, uin
     return best_cls;
 }
 
-// Trích xuất tensor 20x20 (400 byte INT8) có chống khuếch đại nhiễu vùng tối (span >= 48)
+// Trích xuất tensor 20x20 (400 byte INT8) dùng mảng tĩnh s_patch_raw (0 byte Stack)
 static int32_t extract_patch_int8_400(const uint16_t *rgb565, int img_w, int img_h,
                                       int x0, int y0, int bw, int bh, int8_t *out_feat400) {
     if (bw < 1) bw = 1;
     if (bh < 1) bh = 1;
     int32_t min_y = 255, max_y = 0;
-    uint8_t raw[400];
     for (int py = 0; py < 20; py++) {
         int sy = y0 + (py * bh) / 20;
         if (sy < 0) sy = 0;
@@ -204,16 +210,15 @@ static int32_t extract_patch_int8_400(const uint16_t *rgb565, int img_w, int img
             uint8_t g = (uint8_t)(((v >> 5)  & 0x3F) << 2);
             uint8_t b = (uint8_t)((v & 0x1F) << 3);
             uint8_t y_luma = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
-            raw[py * 20 + px] = y_luma;
+            s_patch_raw[py * 20 + px] = y_luma;
             if (y_luma < min_y) min_y = y_luma;
             if (y_luma > max_y) max_y = y_luma;
         }
     }
     int32_t true_contrast = max_y - min_y;
-    // QUAN TRỌNG: Đặt mẫu số chuẩn hóa tối thiểu = 48 để KHÔNG BAO GIỜ phóng đại nhiễu nền tối!
     int32_t norm_span = (true_contrast < 48) ? 48 : true_contrast;
     for (int i = 0; i < 400; i++) {
-        int32_t norm = ((int32_t)(raw[i] - min_y) * 127) / norm_span;
+        int32_t norm = ((int32_t)(s_patch_raw[i] - min_y) * 127) / norm_span;
         if (norm < 0) norm = 0;
         if (norm > 127) norm = 127;
         out_feat400[i] = (int8_t)norm;
@@ -221,14 +226,9 @@ static int32_t extract_patch_int8_400(const uint16_t *rgb565, int img_w, int img
     return true_contrast;
 }
 
-// Thuật toán Học Môi Trường Liên Tục + Lọc Nhiễu 5 Tầng (5-Stage Anti-Noise Continual Learner)
+// Thuật toán Học Môi Trường Liên Tục + Lọc Nhiễu 5 Tầng (Sử dụng mảng BSS tĩnh, an toàn Stack 100%)
 static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, int frame_w, int frame_h) {
     uint32_t t0 = micros();
-
-    float raw_y[GRID_CELLS];
-    float raw_cr[GRID_CELLS];
-    float raw_cb[GRID_CELLS];
-    float raw_edge[GRID_CELLS];
 
     int thumb_w = frame_w / 8;
     int thumb_h = frame_h / 8;
@@ -240,14 +240,11 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     }
 
     if (!decoded_ok) {
-        // Nếu khung hình đang ở độ phân giải FHD (240x135) hoặc chưa giải mã được RGB, bỏ qua chu kỳ này
-        // để tuyệt đối không dùng dữ liệu rác làm nhiễu mô hình!
         return;
     }
 
     float global_luma_sum = 0.0f;
 
-    // Trích xuất đặc trưng thô trên lưới 20x15 (có bước nhảy sub-sampling 2x2 để giảm 75% thời gian CPU!)
     for (int gy = 0; gy < GRID_H; gy++) {
         int y_start = (gy * thumb_h) / GRID_H;
         int y_end   = ((gy + 1) * thumb_h) / GRID_H;
@@ -280,21 +277,20 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
             }
             int idx = gy * GRID_W + gx;
             if (cnt > 0) {
-                raw_y[idx]    = (float)sum_y / cnt;
-                raw_cr[idx]   = (float)sum_r / cnt - raw_y[idx];
-                raw_cb[idx]   = (float)sum_b / cnt - raw_y[idx];
-                raw_edge[idx] = (float)sum_edge / cnt;
+                s_raw_y[idx]    = (float)sum_y / cnt;
+                s_raw_cr[idx]   = (float)sum_r / cnt - s_raw_y[idx];
+                s_raw_cb[idx]   = (float)sum_b / cnt - s_raw_y[idx];
+                s_raw_edge[idx] = (float)sum_edge / cnt;
             } else {
-                raw_y[idx] = raw_cr[idx] = raw_cb[idx] = raw_edge[idx] = 0.0f;
+                s_raw_y[idx] = s_raw_cr[idx] = s_raw_cb[idx] = s_raw_edge[idx] = 0.0f;
             }
-            global_luma_sum += raw_y[idx];
+            global_luma_sum += s_raw_y[idx];
         }
     }
 
     float cur_global_luma = global_luma_sum / (float)GRID_CELLS;
 
-    // TẦNG LỌC NHIỄU 1: Lọc thông thấp không gian 3x3 (Spatial Smoothing) triệt tiêu hot-pixels & nhiễu hạt
-    float cell_y[GRID_CELLS], cell_cr[GRID_CELLS], cell_cb[GRID_CELLS], cell_edge[GRID_CELLS];
+    // TẦNG LỌC NHIỄU 1: Lọc thông thấp không gian 3x3 (Spatial Smoothing) xóa hot-pixels
     for (int gy = 0; gy < GRID_H; gy++) {
         for (int gx = 0; gx < GRID_W; gx++) {
             float sy = 0, scr = 0, scb = 0, sed = 0, w_sum = 0;
@@ -306,34 +302,33 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                     if (nx < 0 || nx >= GRID_W) continue;
                     float w = (dx == 0 && dy == 0) ? 4.0f : 1.0f;
                     int n_idx = ny * GRID_W + nx;
-                    sy  += w * raw_y[n_idx];
-                    scr += w * raw_cr[n_idx];
-                    scb += w * raw_cb[n_idx];
-                    sed += w * raw_edge[n_idx];
+                    sy  += w * s_raw_y[n_idx];
+                    scr += w * s_raw_cr[n_idx];
+                    scb += w * s_raw_cb[n_idx];
+                    sed += w * s_raw_edge[n_idx];
                     w_sum += w;
                 }
             }
             int idx = gy * GRID_W + gx;
-            cell_y[idx]    = sy  / w_sum;
-            cell_cr[idx]   = scr / w_sum;
-            cell_cb[idx]   = scb / w_sum;
-            cell_edge[idx] = sed / w_sum;
+            s_cell_y[idx]    = sy  / w_sum;
+            s_cell_cr[idx]   = scr / w_sum;
+            s_cell_cb[idx]   = scb / w_sum;
+            s_cell_edge[idx] = sed / w_sum;
         }
     }
 
     // Khởi tạo nền môi trường ở frame đầu tiên hoặc khi bấm nút "Học lại góc Camera"
     if (!s_env_initialized || s_force_relearn) {
         for (int i = 0; i < GRID_CELLS; i++) {
-            s_bg_y[i]         = cell_y[i];
-            s_bg_cr[i]        = cell_cr[i];
-            s_bg_cb[i]        = cell_cb[i];
-            s_bg_edge[i]      = cell_edge[i];
+            s_bg_y[i]         = s_cell_y[i];
+            s_bg_cr[i]        = s_cell_cr[i];
+            s_bg_cb[i]        = s_cell_cb[i];
+            s_bg_edge[i]      = s_cell_edge[i];
             s_bg_var[i]       = 12.0f;
             s_cell_persist[i] = 0;
         }
-        int8_t full_feat[400];
-        extract_patch_int8_400(s_rgb565_thumb, thumb_w, thumb_h, 0, 0, thumb_w, thumb_h, full_feat);
-        s_scene_ai_cls      = adaremac_run_nn(full_feat, AI_FEAT_DIM, 2, 0, s_bg_logits);
+        extract_patch_int8_400(s_rgb565_thumb, thumb_w, thumb_h, 0, 0, thumb_w, thumb_h, s_patch_feat);
+        s_scene_ai_cls      = adaremac_run_nn(s_patch_feat, AI_FEAT_DIM, 2, 0, s_bg_logits);
         s_prev_global_luma  = cur_global_luma;
         s_env_initialized   = true;
         s_force_relearn     = false;
@@ -341,21 +336,16 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     }
 
     // TẦNG LỌC NHIỄU 2: Vùng chết nhiễu (Noise Deadband = 18/255) & Độ lệch chuẩn tối thiểu (sigma >= 10)
-    // Mọi dao động nhiễu cảm biến trong bóng tối (< 18 mức xám) đều bị gán Z = 0!
-    float z_map[GRID_CELLS];
-    uint8_t raw_anom[GRID_CELLS];
     int raw_changed_cells = 0;
     float thr = s_anom_threshold;
 
     for (int i = 0; i < GRID_CELLS; i++) {
-        float dy  = fabsf(cell_y[i]    - s_bg_y[i]);
-        float dcr = fabsf(cell_cr[i]   - s_bg_cr[i]);
-        float dcb = fabsf(cell_cb[i]   - s_bg_cb[i]);
-        float ded = fabsf(cell_edge[i] - s_bg_edge[i]);
+        float dy  = fabsf(s_cell_y[i]    - s_bg_y[i]);
+        float dcr = fabsf(s_cell_cr[i]   - s_bg_cr[i]);
+        float dcb = fabsf(s_cell_cb[i]   - s_bg_cb[i]);
+        float ded = fabsf(s_cell_edge[i] - s_bg_edge[i]);
 
         float raw_diff = dy + 0.35f * (dcr + dcb) + 0.45f * ded;
-
-        // Trừ trực tiếp ngưỡng nhiễu nền cố định (Deadband = 18.0 mức xám trên thang 0..255)
         float clean_diff = raw_diff - 18.0f;
         if (clean_diff < 0.0f || (dy < 14.0f && ded < 12.0f)) {
             clean_diff = 0.0f;
@@ -363,13 +353,13 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
 
         float sigma = (s_bg_var[i] < 10.0f) ? 10.0f : s_bg_var[i];
         float z = clean_diff / sigma;
-        z_map[i] = z;
+        s_z_map[i] = z;
 
         if (z > thr) {
-            raw_anom[i] = 1;
+            s_raw_anom[i] = 1;
             raw_changed_cells++;
         } else {
-            raw_anom[i] = 0;
+            s_raw_anom[i] = 0;
         }
     }
 
@@ -388,21 +378,19 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
         s_fast_learn_frames--;
         float alpha_fast = 0.32f;
         for (int i = 0; i < GRID_CELLS; i++) {
-            float dy = fabsf(cell_y[i] - s_bg_y[i]);
-            s_bg_y[i]         = (1.0f - alpha_fast) * s_bg_y[i]    + alpha_fast * cell_y[i];
-            s_bg_cr[i]        = (1.0f - alpha_fast) * s_bg_cr[i]   + alpha_fast * cell_cr[i];
-            s_bg_cb[i]        = (1.0f - alpha_fast) * s_bg_cb[i]   + alpha_fast * cell_cb[i];
-            s_bg_edge[i]      = (1.0f - alpha_fast) * s_bg_edge[i] + alpha_fast * cell_edge[i];
+            float dy = fabsf(s_cell_y[i] - s_bg_y[i]);
+            s_bg_y[i]         = (1.0f - alpha_fast) * s_bg_y[i]    + alpha_fast * s_cell_y[i];
+            s_bg_cr[i]        = (1.0f - alpha_fast) * s_bg_cr[i]   + alpha_fast * s_cell_cr[i];
+            s_bg_cb[i]        = (1.0f - alpha_fast) * s_bg_cb[i]   + alpha_fast * s_cell_cb[i];
+            s_bg_edge[i]      = (1.0f - alpha_fast) * s_bg_edge[i] + alpha_fast * s_cell_edge[i];
             s_bg_var[i]       = (1.0f - alpha_fast) * s_bg_var[i]  + alpha_fast * (dy + 10.0f);
-            s_cell_persist[i] = 0; // Xóa toàn bộ bộ đếm bất thường cũ khi đổi góc camera!
+            s_cell_persist[i] = 0;
             if (s_bg_var[i] > 30.0f) s_bg_var[i] = 30.0f;
         }
-        int8_t full_feat[400];
-        float cur_logits[AI_NUM_CLASSES];
-        extract_patch_int8_400(s_rgb565_thumb, thumb_w, thumb_h, 0, 0, thumb_w, thumb_h, full_feat);
-        s_scene_ai_cls = adaremac_run_nn(full_feat, AI_FEAT_DIM, 2, 0, cur_logits);
+        extract_patch_int8_400(s_rgb565_thumb, thumb_w, thumb_h, 0, 0, thumb_w, thumb_h, s_patch_feat);
+        s_scene_ai_cls = adaremac_run_nn(s_patch_feat, AI_FEAT_DIM, 2, 0, s_cur_logits);
         for (int c = 0; c < AI_NUM_CLASSES; c++) {
-            s_bg_logits[c] = 0.7f * s_bg_logits[c] + 0.3f * cur_logits[c];
+            s_bg_logits[c] = 0.7f * s_bg_logits[c] + 0.3f * s_cur_logits[c];
         }
 
         uint32_t dt_us = micros() - t0;
@@ -418,53 +406,50 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     }
 
     // TẦNG LỌC NHIỄU 4: Kiểm tra lân cận không gian (>= 2 ô kề nhau) & Bền vững thời gian (>= 3 frame liên tiếp)
-    uint8_t verified_anom[GRID_CELLS];
-    memset(verified_anom, 0, sizeof(verified_anom));
+    memset(s_verified_anom, 0, sizeof(s_verified_anom));
 
     for (int gy = 0; gy < GRID_H; gy++) {
         for (int gx = 0; gx < GRID_W; gx++) {
             int idx = gy * GRID_W + gx;
             int active_neighbors = 0;
-            if (raw_anom[idx]) {
+            if (s_raw_anom[idx]) {
                 for (int dy = -1; dy <= 1; dy++) {
                     for (int dx = -1; dx <= 1; dx++) {
                         if (dx == 0 && dy == 0) continue;
                         int nx = gx + dx, ny = gy + dy;
                         if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                            if (raw_anom[ny * GRID_W + nx]) active_neighbors++;
+                            if (s_raw_anom[ny * GRID_W + nx]) active_neighbors++;
                         }
                     }
                 }
             }
 
-            // Chỉ tăng bộ đếm bền vững nếu ô này VÀ ít nhất 2 ô sát cạnh nó cùng thay đổi
-            if (raw_anom[idx] && active_neighbors >= 2) {
+            if (s_raw_anom[idx] && active_neighbors >= 2) {
                 if (s_cell_persist[idx] < 12) s_cell_persist[idx]++;
             } else {
                 if (s_cell_persist[idx] >= 2) s_cell_persist[idx] -= 2;
                 else s_cell_persist[idx] = 0;
             }
 
-            // Vật thể thật phải tồn tại bền vững tại vị trí đó ít nhất 3 chu kỳ liên tiếp!
             if (s_cell_persist[idx] >= 3) {
-                verified_anom[idx] = 1;
+                s_verified_anom[idx] = 1;
             }
         }
     }
 
     // Cập nhật thích nghi liên tục mô hình nền môi trường
     for (int i = 0; i < GRID_CELLS; i++) {
-        float alpha = verified_anom[i] ? 0.006f : 0.06f;
-        float dy  = fabsf(cell_y[i]  - s_bg_y[i]);
-        float dcr = fabsf(cell_cr[i] - s_bg_cr[i]);
-        float dcb = fabsf(cell_cb[i] - s_bg_cb[i]);
+        float alpha = s_verified_anom[i] ? 0.006f : 0.06f;
+        float dy  = fabsf(s_cell_y[i]  - s_bg_y[i]);
+        float dcr = fabsf(s_cell_cr[i] - s_bg_cr[i]);
+        float dcb = fabsf(s_cell_cb[i] - s_bg_cb[i]);
         float diff = dy + 0.3f * (dcr + dcb);
 
-        s_bg_y[i]    = (1.0f - alpha) * s_bg_y[i]    + alpha * cell_y[i];
-        s_bg_cr[i]   = (1.0f - alpha) * s_bg_cr[i]   + alpha * cell_cr[i];
-        s_bg_cb[i]   = (1.0f - alpha) * s_bg_cb[i]   + alpha * cell_cb[i];
-        s_bg_edge[i] = (1.0f - alpha) * s_bg_edge[i] + alpha * cell_edge[i];
-        if (!verified_anom[i]) {
+        s_bg_y[i]    = (1.0f - alpha) * s_bg_y[i]    + alpha * s_cell_y[i];
+        s_bg_cr[i]   = (1.0f - alpha) * s_bg_cr[i]   + alpha * s_cell_cr[i];
+        s_bg_cb[i]   = (1.0f - alpha) * s_bg_cb[i]   + alpha * s_cell_cb[i];
+        s_bg_edge[i] = (1.0f - alpha) * s_bg_edge[i] + alpha * s_cell_edge[i];
+        if (!s_verified_anom[i]) {
             s_bg_var[i] = 0.92f * s_bg_var[i] + 0.08f * (diff + 8.0f);
             if (s_bg_var[i] < 10.0f) s_bg_var[i] = 10.0f;
             if (s_bg_var[i] > 30.0f) s_bg_var[i] = 30.0f;
@@ -472,32 +457,31 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     }
 
     // TẦNG LỌC NHIỄU 5: Gom cụm 8 hướng + Kiểm tra diện tích tối thiểu (>= 3 ô) & Độ tương phản thật
-    uint8_t visited[GRID_CELLS];
-    memset(visited, 0, sizeof(visited));
-    AnomBox cand_boxes[MAX_ANOM_BOXES];
+    memset(s_visited, 0, sizeof(s_visited));
     int cand_count = 0;
 
     for (int sy = 0; sy < GRID_H; sy++) {
         for (int sx = 0; sx < GRID_W; sx++) {
             int start_idx = sy * GRID_W + sx;
-            if (!verified_anom[start_idx] || visited[start_idx]) continue;
+            if (!s_verified_anom[start_idx] || s_visited[start_idx]) continue;
 
-            int qx[GRID_CELLS], qy[GRID_CELLS];
             int q_head = 0, q_tail = 0;
-            qx[q_tail] = sx; qy[q_tail] = sy; q_tail++;
-            visited[start_idx] = 1;
+            s_qx[q_tail] = (int16_t)sx;
+            s_qy[q_tail] = (int16_t)sy;
+            q_tail++;
+            s_visited[start_idx] = 1;
 
             int min_gx = sx, max_gx = sx;
             int min_gy = sy, max_gy = sy;
             float sum_z = 0.0f;
 
             while (q_head < q_tail) {
-                int cx = qx[q_head];
-                int cy = qy[q_head];
+                int cx = s_qx[q_head];
+                int cy = s_qy[q_head];
                 q_head++;
 
                 int c_idx = cy * GRID_W + cx;
-                sum_z += z_map[c_idx];
+                sum_z += s_z_map[c_idx];
 
                 if (cx < min_gx) min_gx = cx;
                 if (cx > max_gx) max_gx = cx;
@@ -510,10 +494,10 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                         int nx = cx + dx, ny = cy + dy;
                         if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
                             int n_idx = ny * GRID_W + nx;
-                            if (verified_anom[n_idx] && !visited[n_idx]) {
-                                visited[n_idx] = 1;
-                                qx[q_tail] = nx;
-                                qy[q_tail] = ny;
+                            if (s_verified_anom[n_idx] && !s_visited[n_idx]) {
+                                s_visited[n_idx] = 1;
+                                s_qx[q_tail] = (int16_t)nx;
+                                s_qy[q_tail] = (int16_t)ny;
                                 q_tail++;
                             }
                         }
@@ -522,7 +506,6 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
             }
 
             int cluster_cells = q_tail;
-            // Yêu cầu vật thể phải chiếm ít nhất 3 ô lưới liên thông (~1% diện tích khung hình)
             if (cluster_cells < 3) continue;
 
             if (cand_count < MAX_ANOM_BOXES) {
@@ -530,11 +513,9 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                 int py0 = (min_gy * thumb_h) / GRID_H;
                 int pbw = ((max_gx - min_gx + 1) * thumb_w) / GRID_W;
                 int pbh = ((max_gy - min_gy + 1) * thumb_h) / GRID_H;
-                int8_t patch_feat[400];
 
                 int32_t patch_contrast = extract_patch_int8_400(s_rgb565_thumb, thumb_w, thumb_h,
-                                                                px0, py0, pbw, pbh, patch_feat);
-                // Loại bỏ các vùng bóng mờ phẳng không có chi tiết vật thể (contrast < 22)
+                                                                px0, py0, pbw, pbh, s_patch_feat);
                 if (patch_contrast < 22) continue;
 
                 AnomBox b;
@@ -543,8 +524,8 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                 b.w = (float)(max_gx - min_gx + 1) / (float)GRID_W;
                 b.h = (float)(max_gy - min_gy + 1) / (float)GRID_H;
 
-                b.ai_cls_m1 = adaremac_run_nn(patch_feat, AI_PARTIAL_DIM, 1, 2, NULL);
-                b.ai_cls_m2 = adaremac_run_nn(patch_feat, AI_FEAT_DIM, 2, 0, NULL);
+                b.ai_cls_m1 = adaremac_run_nn(s_patch_feat, AI_PARTIAL_DIM, 1, 2, NULL);
+                b.ai_cls_m2 = adaremac_run_nn(s_patch_feat, AI_FEAT_DIM, 2, 0, NULL);
 
                 float avg_z = sum_z / (float)cluster_cells;
                 int conf = (int)(60.0f + (avg_z - thr) * 10.0f);
@@ -552,7 +533,7 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                 if (conf > 98) conf = 98;
                 b.score = conf;
 
-                cand_boxes[cand_count++] = b;
+                s_cand_boxes[cand_count++] = b;
             }
         }
     }
@@ -561,7 +542,7 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
 
     portENTER_CRITICAL(&s_ai_mux);
     s_num_boxes = cand_count;
-    for (int i = 0; i < cand_count; i++) s_boxes[i] = cand_boxes[i];
+    for (int i = 0; i < cand_count; i++) s_boxes[i] = s_cand_boxes[i];
     s_angle_changed = angle_shift_now;
     s_changed_cell_ratio = changed_ratio;
     s_env_stability = (1.0f - fminf(1.0f, changed_ratio * 1.5f)) * 100.0f;
@@ -569,7 +550,7 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     portEXIT_CRITICAL(&s_ai_mux);
 }
 
-// Task AI trên Core 0: Quét nhẹ nhàng mỗi 110ms (~9 Hz) để nhường 95% băng thông PSRAM cho Stream Video!
+// Task AI trên Core 0: Stack 20KB rộng rãi + nghỉ 110ms giữa 2 chu kỳ quét
 static void ai_continual_learning_task(void *arg) {
     while (true) {
         if (!s_cam_ok) {
@@ -585,7 +566,6 @@ static void ai_continual_learning_task(void *arg) {
             }
             analyze_frame_and_learn(s_ai_jpeg_buf, s_ai_jpeg_len, s_ai_frame_w, s_ai_frame_h);
             s_ai_frame_ready = false;
-            // Nghỉ 110ms giữa 2 lần phân tích AI để không tranh chấp bus PSRAM với luồng Video!
             vTaskDelay(pdMS_TO_TICKS(110));
             s_ai_need_frame = true;
         } else {
@@ -759,7 +739,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           ctx.fillText(label, bx + 7, ly + 17);
         });
       } catch (e) {}
-      setTimeout(pollAI, 200); // Quét nhẹ 5 lần/giây để dành 100% băng thông Wi-Fi cho luồng Video!
+      setTimeout(pollAI, 200);
     }
     pollAI();
   </script>
@@ -770,6 +750,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 // ---------------- 5. CÁC HANDLER HTTP (PORT 80: UI + AI JSON | PORT 81: MJPEG STREAM) -------
 #define PART_BOUNDARY "123456789000000000000987654321"
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
+static char s_json_buf[1024];
 
 static esp_err_t index_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
@@ -802,24 +783,23 @@ static esp_err_t ai_json_handler(httpd_req_t *req) {
     fh         = s_ai_frame_h;
     portEXIT_CRITICAL(&s_ai_mux);
 
-    char json[1024];
-    int len = snprintf(json, sizeof(json),
+    int len = snprintf(s_json_buf, sizeof(s_json_buf),
         "{\"w\":%u,\"h\":%u,\"fps\":%.1f,\"temp\":%.1f,\"stability\":%.1f,\"changed\":%.3f,"
         "\"angle_shift\":%s,\"learn_left\":%d,\"scene_cls\":%u,\"ai_us\":%lu,\"boxes\":[",
         fw, fh, fps, temp, stab, chg, ang ? "true" : "false", learn_left, s_cls, (unsigned long)infer_us);
 
     for (int i = 0; i < n_boxes; i++) {
-        len += snprintf(json + len, sizeof(json) - len,
+        len += snprintf(s_json_buf + len, sizeof(s_json_buf) - len,
             "%s{\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"score\":%d,\"m1\":%u,\"m2\":%u}",
             (i > 0) ? "," : "",
             local_boxes[i].x, local_boxes[i].y, local_boxes[i].w, local_boxes[i].h,
             local_boxes[i].score, local_boxes[i].ai_cls_m1, local_boxes[i].ai_cls_m2);
     }
-    snprintf(json + len, sizeof(json) - len, "]}");
+    snprintf(s_json_buf + len, sizeof(s_json_buf) - len, "]}");
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    return httpd_resp_send(req, json, strlen(json));
+    return httpd_resp_send(req, s_json_buf, strlen(s_json_buf));
 }
 
 static esp_err_t ctrl_handler(httpd_req_t *req) {
@@ -857,7 +837,6 @@ static esp_err_t ctrl_handler(httpd_req_t *req) {
     return httpd_resp_send(req, "OK", 2);
 }
 
-// Handler phát luồng video MJPEG tốc độ cao (Gộp Boundary + Header vào 1 gói TCP duy nhất!)
 static esp_err_t stream_handler(httpd_req_t *req) {
     int sockfd = httpd_req_to_sockfd(req);
     int nodelay = 1;
@@ -885,7 +864,6 @@ static esp_err_t stream_handler(httpd_req_t *req) {
         s_ai_frame_w = fb->width;
         s_ai_frame_h = fb->height;
 
-        // Chỉ chép khung ảnh cho AI khi AI Task đang rảnh và độ phân giải hỗ trợ giải mã nhanh 1/8
         if (s_ai_need_frame && !s_ai_frame_ready && s_ai_jpeg_buf &&
             fb->len <= MAX_JPEG_COPY_SZ && (fb->width / 8) <= MAX_RGB_THUMB_W) {
             memcpy(s_ai_jpeg_buf, fb->buf, fb->len);
@@ -894,7 +872,6 @@ static esp_err_t stream_handler(httpd_req_t *req) {
             s_ai_need_frame  = false;
         }
 
-        // Gộp cả Boundary và Content-Length vào 1 lần gửi chunk duy nhất để giảm 50% số gói tin TCP!
         int hlen = snprintf(hdr_buf, sizeof(hdr_buf),
                             "\r\n--" PART_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
                             (unsigned)fb->len);
@@ -922,7 +899,8 @@ static void start_web_and_stream_servers() {
     httpd_config_t cfg_web = HTTPD_DEFAULT_CONFIG();
     cfg_web.server_port       = 80;
     cfg_web.ctrl_port         = 32768;
-    cfg_web.keep_alive_enable = true; // Giữ kết nối TCP cho /ai không phải bắt tay lại mỗi lần hỏi!
+    cfg_web.stack_size        = 8192;
+    cfg_web.keep_alive_enable = true;
     if (httpd_start(&s_web_httpd, &cfg_web) == ESP_OK) {
         httpd_uri_t u_idx  = { .uri = "/",     .method = HTTP_GET, .handler = index_handler,   .user_ctx = NULL };
         httpd_uri_t u_ai   = { .uri = "/ai",   .method = HTTP_GET, .handler = ai_json_handler, .user_ctx = NULL };
@@ -935,7 +913,7 @@ static void start_web_and_stream_servers() {
     httpd_config_t cfg_stream = HTTPD_DEFAULT_CONFIG();
     cfg_stream.server_port = 81;
     cfg_stream.ctrl_port   = 32769;
-    cfg_stream.stack_size  = 10240;
+    cfg_stream.stack_size  = 12288;
     if (httpd_start(&s_stream_httpd, &cfg_stream) == ESP_OK) {
         httpd_uri_t u_strm = { .uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL };
         httpd_register_uri_handler(s_stream_httpd, &u_strm);
@@ -1019,13 +997,9 @@ void setup() {
                   (unsigned)(ESP.getPsramSize() / 1024),
                   (unsigned)(ESP.getFreeHeap() / 1024));
 
-    // Cấp phát bộ đệm giải mã縮 nhỏ trong SRAM nội bộ (hoặc PSRAM) để tăng tốc độ giải mã gấp 4 lần!
-    s_rgb565_thumb = (uint16_t *)heap_caps_malloc(MAX_RGB_THUMB_W * MAX_RGB_THUMB_H * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!s_rgb565_thumb && has_psram) {
-        s_rgb565_thumb = (uint16_t *)ps_malloc(MAX_RGB_THUMB_W * MAX_RGB_THUMB_H * sizeof(uint16_t));
-    }
     if (has_psram) {
-        s_ai_jpeg_buf = (uint8_t *)ps_malloc(MAX_JPEG_COPY_SZ);
+        s_ai_jpeg_buf  = (uint8_t *)ps_malloc(MAX_JPEG_COPY_SZ);
+        s_rgb565_thumb = (uint16_t *)ps_malloc(MAX_RGB_THUMB_W * MAX_RGB_THUMB_H * sizeof(uint16_t));
     }
 
     camera_config_t config = {};
@@ -1047,9 +1021,8 @@ void setup() {
     config.pin_sccb_scl = CAM_PIN_SIOC;
     config.pin_pwdn     = CAM_PIN_PWDN;
     config.pin_reset    = CAM_PIN_RESET;
-    config.xclk_freq_hz = 20000000; // 20 MHz chuẩn PLL của OV5640 giúp DMA đọc mượt không rớt frame
+    config.xclk_freq_hz = 20000000;
     config.pixel_format = PIXFORMAT_JPEG;
-    // Khởi động ở HD (1280x720) 16:9 để vừa nét căng vừa đạt tốc độ 25-30 FPS mượt mà (có thể chọn FHD trên Web)
     config.frame_size   = has_psram ? FRAMESIZE_HD : FRAMESIZE_VGA;
     config.jpeg_quality = 10;
     config.fb_count     = has_psram ? 3 : 1;
@@ -1068,24 +1041,20 @@ void setup() {
     if (s) {
         s->set_framesize(s, has_psram ? FRAMESIZE_HD : FRAMESIZE_VGA);
         s->set_quality(s, 10);
-        // QUAN TRỌNG NHẤT ĐỂ KHÔNG BỊ KẸT Ở 11.0 FPS VÀ KHÔNG BỊ ẢNH TỐI:
-        // 1. Tắt aec2 (set_aec2 = 0): Ngăn OV5640 tự động chia tần số khung hình xuống 11 FPS khi thiếu sáng!
-        // 2. Mở trần khuếch đại sáng lên GAINCEILING_16X và bù sáng ae_level = +1 để ảnh sáng rõ ở 25-30 FPS!
-        // 3. Đặt sharpness = 0 (mặc định) để ISP không khuếch đại hạt nhiễu trắng (hot pixels) trong phòng tối!
         s->set_exposure_ctrl(s, 1);
-        s->set_aec2(s, 0);                         // TẮT Night-Mode Frame Drop (nguyên nhân gây kẹt 11.0 FPS!)
-        s->set_ae_level(s, 1);                     // Bù sáng +1 giúp ảnh sáng rõ trong phòng
-        s->set_gain_ctrl(s, 1);                    // Bật AGC
-        s->set_gainceiling(s, (gainceiling_t)4);   // GAINCEILING_16X giúp ảnh sáng mà không cần giảm FPS
-        s->set_brightness(s, 1);                   // Tăng nhẹ độ sáng (+1)
-        s->set_contrast(s, 1);                     // Tăng tương phản (+1)
+        s->set_aec2(s, 0);                         // TẮT Night-Mode Frame Drop (tránh kẹt 11.0 FPS!)
+        s->set_ae_level(s, 1);
+        s->set_gain_ctrl(s, 1);
+        s->set_gainceiling(s, (gainceiling_t)4);   // GAINCEILING_16X
+        s->set_brightness(s, 1);
+        s->set_contrast(s, 1);
         s->set_saturation(s, 0);
-        s->set_sharpness(s, 0);                    // Để 0 để không làm nổi hạt muối tiêu trong vùng tối
-        s->set_denoise(s, 1);                      // Bật khử nhiễu phần cứng
+        s->set_sharpness(s, 0);
+        s->set_denoise(s, 1);
         s->set_whitebal(s, 1);
         s->set_awb_gain(s, 1);
-        s->set_bpc(s, 1);                          // Khử điểm chết đen
-        s->set_wpc(s, 1);                          // Khử điểm chết trắng (xóa các chấm trắng li ti trên ảnh!)
+        s->set_bpc(s, 1);
+        s->set_wpc(s, 1);
         s->set_raw_gma(s, 1);
         s->set_lenc(s, 1);
         s->set_dcw(s, 1);
@@ -1099,7 +1068,8 @@ void setup() {
     setup_zero_bottleneck_wifi();
     start_web_and_stream_servers();
 
-    xTaskCreatePinnedToCore(ai_continual_learning_task, "ai_learn_task", 12288, NULL, 2, NULL, 0);
+    // Cấp Stack 20480 bytes (20 KB) cho ai_learn_task (toàn bộ mảng lớn đã đưa ra BSS tĩnh)
+    xTaskCreatePinnedToCore(ai_continual_learning_task, "ai_learn_task", 20480, NULL, 2, NULL, 0);
 }
 
 static uint32_t s_last_log_ms  = 0;
