@@ -33,37 +33,7 @@ adaremac/
 └── docs/                              # Báo cáo kỹ thuật PDF/DOCX và hướng dẫn đánh giá AI
 ```
 
-## 2. Hướng dẫn gỡ bỏ triệt để ESP-IDF khỏi máy tính Windows
-
-Để xóa sạch hoàn toàn ESP-IDF, bộ công cụ ~10 GB, biến môi trường `PATH` và Registry trên máy bạn:
-
-### Cách 1: Chạy tự động bằng 1 lệnh PowerShell
-Mở **PowerShell** tại thư mục `adaremac/` và chạy:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\uninstall_esp_idf.ps1
-```
-
-### Cách 2: Kiểm tra và gỡ thủ công từng phần
-1. **Gỡ Extension trên VS Code**:
-   * Mở VS Code $\to$ nhấn `Ctrl + Shift + X` $\to$ tìm **`ESP-IDF`** (của Espressif Systems) $\to$ bấm **Uninstall**.
-   * Nhấn `Ctrl + Shift + P` $\to$ gõ `Preferences: Open User Settings (JSON)` $\to$ xóa tất cả các dòng bắt đầu bằng `"idf.` (như `"idf.espIdfPathWin"`, `"idf.toolsPathWin"`, `"idf.pythonBinPathWin"`) rồi lưu lại.
-2. **Gỡ trình cài đặt trong Windows Settings**:
-   * Nhấn `Win + I` $\to$ **Apps $\to$ Installed apps** $\to$ tìm **ESP-IDF Tools** / **Espressif-IDE** / **EIM** (nếu có) và chọn **Uninstall**.
-3. **Xóa tận gốc 4 thư mục chứa bộ cài & thư viện ẩn (Giải phóng 8–15 GB ổ cứng)**:
-   * `C:\Espressif`
-   * `C:\Users\nhath\.espressif` *(chứa `eim_gui`, trình biên dịch GCC và môi trường ảo Python)*
-   * `C:\Users\nhath\AppData\Local\Espressif` *(chứa cache thư viện tải về)*
-   * `C:\Users\nhath\esp` *(nếu có)*
-4. **Xóa đường dẫn trong biến môi trường `PATH` (Như trong ảnh Environment Variables của bạn)**:
-   * Nhấn phím Windows, gõ **`Edit environment variables for your account`** $\to$ chọn biến **`Path`** $\to$ **Edit** $\to$ chọn và bấm **Delete** 3 dòng:
-     * `C:\Espressif\tools\git\bin`
-     * `C:\Espressif\tools\git\cmd`
-     * `C:\Users\nhath\.espressif\eim_gui`
-   * Ở bảng **User variables** bên ngoài, nếu thấy các biến `IDF_PATH`, `IDF_TOOLS_PATH`, `IDF_PYTHON_ENV_PATH` thì chọn và bấm **Delete**.
-5. **Xóa khóa Registry (Nếu muốn sạch 100%)**:
-   * Nhấn `Win + R` $\to$ gõ `regedit` $\to$ tìm và xóa nhánh `HKEY_CURRENT_USER\Software\Espressif` và `HKEY_LOCAL_MACHINE\SOFTWARE\Espressif` (nếu có).
-
-## 3. Các lỗi phần cứng & code đã được sửa triệt để trong bản v3 này (Đảm bảo không nóng chip)
+## 2. Các lỗi phần cứng & code đã được sửa triệt để trong bản v3 này (Đảm bảo không nóng chip)
 
 1. **Sửa lỗi nóng chip FPGA ở cả bản `standalone` và bản `rtl` (`top_tn20k.v`)**:
    * Hạ tham số `N_LANES` từ `16` xuống **`1`** trong cả `top_standalone.v`, `top_tn20k.v` và `adaremac_core.v` (giảm 95% số LUT/Flip-Flop đảo trạng thái).
@@ -76,7 +46,7 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_esp_idf.ps1
 3. **Dồn 100% chân kết nối của ESP32-S3 sang duy nhất Hàng Phải (Right Row)**:
    * Toàn bộ 14 chân Camera OV5640 nằm bên Hàng Trái, còn toàn bộ các dây nối ra ngoài (`SPI`, `I2C`, `VCC 3.3V cho INA219`, `GND`) đều nằm ở **Hàng Phải** để khi cắm lên Breadboard chỉ cần cắm dây ở 1 bên.
 
-## 4. Quy trình cài đặt và chạy từng bước từ A–Z (Với Arduino IDE 2.x)
+## 3. Quy trình cài đặt và chạy từng bước từ A–Z (Với Arduino IDE 2.x)
 
 ### Bước 1: Cài đặt Arduino IDE 2.x và gói Board ESP32
 
