@@ -347,12 +347,8 @@ static bool camera_init_ov5640() {
     }
     sensor_t *s = esp_camera_sensor_get();
     if (s && s->id.PID == OV5640_PID && s->set_reg && s->get_reg) {
-        // Áp dụng làm mát phần mềm OV5640: Tắt MIPI PHY dư thừa (0x300E, 0x4202) & hạ dòng I/O Pad xuống 1x (0x302C)
-        int mipi = s->get_reg(s, 0x300E, 0xFF);
-        if (mipi >= 0) s->set_reg(s, 0x300E, 0xFF, (mipi | 0x18) & ~0x04);
-        s->set_reg(s, 0x4202, 0xFF, 0x00);
-        int pad = s->get_reg(s, 0x302C, 0xFF);
-        if (pad >= 0) s->set_reg(s, 0x302C, 0xFF, pad & 0x3F);
+        // V4 SAFETY: 0x4202 is frame mask, not a MIPI power switch.
+        // Preserve esp32-camera sensor clock, MIPI and DVP pad defaults.
     }
     Serial.printf("[OK] Camera OV5640 san sang (PID = 0x%04X, 320x240 RGB565 + Software Cooling)\n", s ? s->id.PID : 0);
     return true;
