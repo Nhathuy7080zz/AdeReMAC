@@ -1,3 +1,9 @@
+# AdaReMAC V4 — điều chỉnh quan trọng (19/10/2026)
+
+**CẢNH BÁO**: Toàn bộ kết quả FOMO 99,97%, streaming 30–36 FPS, Tiny-SSD FPGA và giảm nhiệt độ nêu trong báo cáo V3 **chưa được kiểm chứng bằng đo đạc trên ESP32-S3 + Tang Nano 20K**. `ai_eval/export_for_esp32.py` sử dụng đặc trưng và mẫu sinh tổng hợp; đây không phải mô hình Edge Impulse MobileNetV2 trọn vẹn. `rtl/` chứa lõi MAC qua SPI, không chứa YOLO hoặc backbone CNN. Chi tiết tình trạng V4 trong `docs/V4_GITHUB_STATUS.md`. Gói mã nguồn V4 đầy đủ và Word báo cáo/handover phát hành riêng để tích hợp tiếp.
+
+---
+
 # BẢN BÀN GIAO KỸ THUẬT TOÀN DIỆN DỰ ÁN ADAREMAC
 **(Phiên bản Tái cấu trúc Toàn diện: Edge Impulse FOMO + Tiny-SSD INT8 @ 30+ FPS & Quản lý Nhiệt Phần mềm OV5640 cho ESP32-S3 N16R8 + Sipeed Tang Nano 20K)**
 
