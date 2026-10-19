@@ -1,0 +1,54 @@
+model=mbv2 MAC=5.20M params=22097 train=22526 tune=2502 test=4535
+ep  1 loss 0.4905 tune F1 0.242 (thr 0.40) P 0.240 R 0.244 [241s]
+ep  2 loss 0.3641 tune F1 0.270 (thr 0.50) P 0.279 R 0.261 [230s]
+ep  3 loss 0.3490 tune F1 0.288 (thr 0.50) P 0.310 R 0.269 [239s]
+ep  4 loss 0.3392 tune F1 0.294 (thr 0.60) P 0.324 R 0.269 [220s]
+ep  5 loss 0.3341 tune F1 0.306 (thr 0.50) P 0.318 R 0.294 [223s]
+ep  6 loss 0.3266 tune F1 0.313 (thr 0.60) P 0.340 R 0.289 [216s]
+ep  7 loss 0.3240 tune F1 0.319 (thr 0.55) P 0.383 R 0.274 [211s]
+ep  8 loss 0.3202 tune F1 0.310 (thr 0.55) P 0.328 R 0.294 [215s]
+ep  9 loss 0.3181 tune F1 0.322 (thr 0.55) P 0.372 R 0.285 [216s]
+ep 10 loss 0.3155 tune F1 0.330 (thr 0.60) P 0.402 R 0.279 [222s]
+ep 11 loss 0.3142 tune F1 0.333 (thr 0.60) P 0.393 R 0.290 [318s]
+ep 12 loss 0.3128 tune F1 0.335 (thr 0.65) P 0.405 R 0.286 [291s]
+ep 13 loss 0.3116 tune F1 0.340 (thr 0.60) P 0.389 R 0.301 [225s]
+ep 14 loss 0.3105 tune F1 0.336 (thr 0.60) P 0.382 R 0.300 [226s]
+ep 15 loss 0.3099 tune F1 0.335 (thr 0.60) P 0.381 R 0.300 [217s]
+{
+  "model": "mbv2",
+  "label": "center",
+  "macs": 5200128,
+  "params": 22097,
+  "threshold": 0.5999999999999999,
+  "tune_f1": 0.33963793569305595,
+  "test_coco_val2017": {
+    "tp": 1781,
+    "fp": 3878,
+    "fn": 4495,
+    "precision": 0.3147199151793603,
+    "recall": 0.2837794773741236,
+    "f1": 0.2984499371596146
+  },
+  "test_dist1cell": {
+    "tp": 1318,
+    "fp": 4378,
+    "fn": 4958,
+    "precision": 0.23139044943820225,
+    "recall": 0.210006373486297,
+    "f1": 0.22018042098229204
+  },
+  "test_image_level": {
+    "tp": 1968,
+    "fp": 1320,
+    "fn": 408,
+    "tn": 716,
+    "precision": 0.5985401459854015,
+    "recall": 0.8282828282828283,
+    "fpr": 0.6483300589390962
+  },
+  "n_train": 22526,
+  "n_tune": 2502,
+  "n_test": 4535,
+  "obj_weight": 20.0,
+  "epochs": 15
+}

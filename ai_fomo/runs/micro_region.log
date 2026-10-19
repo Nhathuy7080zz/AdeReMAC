@@ -1,0 +1,69 @@
+model=micro MAC=4.15M params=24537 train=22526 tune=2502 test=4535
+ep  1 loss 0.5592 tune F1 0.251 (thr 0.70) P 0.300 R 0.215 [62s]
+ep  2 loss 0.4500 tune F1 0.260 (thr 0.60) P 0.313 R 0.222 [65s]
+ep  3 loss 0.4243 tune F1 0.256 (thr 0.40) P 0.277 R 0.238 [56s]
+ep  4 loss 0.4123 tune F1 0.269 (thr 0.60) P 0.319 R 0.233 [41s]
+ep  5 loss 0.4043 tune F1 0.283 (thr 0.80) P 0.321 R 0.253 [39s]
+ep  6 loss 0.4000 tune F1 0.289 (thr 0.75) P 0.312 R 0.268 [39s]
+ep  7 loss 0.3955 tune F1 0.299 (thr 0.70) P 0.327 R 0.274 [42s]
+ep  8 loss 0.3903 tune F1 0.305 (thr 0.80) P 0.328 R 0.285 [43s]
+ep  9 loss 0.3842 tune F1 0.309 (thr 0.75) P 0.320 R 0.298 [43s]
+ep 10 loss 0.3842 tune F1 0.300 (thr 0.70) P 0.340 R 0.269 [42s]
+ep 11 loss 0.3807 tune F1 0.307 (thr 0.75) P 0.346 R 0.276 [43s]
+ep 12 loss 0.3787 tune F1 0.296 (thr 0.70) P 0.332 R 0.267 [42s]
+ep 13 loss 0.3749 tune F1 0.312 (thr 0.80) P 0.334 R 0.294 [41s]
+ep 14 loss 0.3731 tune F1 0.309 (thr 0.65) P 0.328 R 0.292 [43s]
+ep 15 loss 0.3718 tune F1 0.311 (thr 0.75) P 0.329 R 0.295 [40s]
+ep 16 loss 0.3687 tune F1 0.318 (thr 0.75) P 0.346 R 0.294 [39s]
+ep 17 loss 0.3659 tune F1 0.320 (thr 0.75) P 0.353 R 0.293 [39s]
+ep 18 loss 0.3653 tune F1 0.309 (thr 0.80) P 0.343 R 0.282 [41s]
+ep 19 loss 0.3621 tune F1 0.319 (thr 0.80) P 0.344 R 0.297 [40s]
+ep 20 loss 0.3620 tune F1 0.318 (thr 0.85) P 0.376 R 0.275 [43s]
+ep 21 loss 0.3595 tune F1 0.315 (thr 0.75) P 0.347 R 0.289 [40s]
+ep 22 loss 0.3586 tune F1 0.324 (thr 0.80) P 0.351 R 0.300 [39s]
+ep 23 loss 0.3558 tune F1 0.324 (thr 0.75) P 0.351 R 0.302 [40s]
+ep 24 loss 0.3555 tune F1 0.322 (thr 0.75) P 0.352 R 0.297 [40s]
+ep 25 loss 0.3566 tune F1 0.326 (thr 0.80) P 0.359 R 0.299 [40s]
+ep 26 loss 0.3555 tune F1 0.327 (thr 0.80) P 0.361 R 0.298 [40s]
+ep 27 loss 0.3562 tune F1 0.328 (thr 0.80) P 0.362 R 0.301 [40s]
+ep 28 loss 0.3537 tune F1 0.326 (thr 0.80) P 0.359 R 0.298 [37s]
+ep 29 loss 0.3529 tune F1 0.325 (thr 0.80) P 0.358 R 0.297 [39s]
+ep 30 loss 0.3534 tune F1 0.325 (thr 0.80) P 0.358 R 0.297 [41s]
+{
+  "model": "micro",
+  "label": "region",
+  "macs": 4151808,
+  "params": 24537,
+  "threshold": 0.7999999999999998,
+  "tune_f1": 0.328448050248626,
+  "test_coco_val2017": {
+    "tp": 1813,
+    "fp": 4354,
+    "fn": 4463,
+    "precision": 0.2939841089670829,
+    "recall": 0.2888782664117272,
+    "f1": 0.2914088242385277
+  },
+  "test_dist1cell": {
+    "tp": 1277,
+    "fp": 4909,
+    "fn": 4999,
+    "precision": 0.20643388296152604,
+    "recall": 0.20347355003186743,
+    "f1": 0.2049430268014765
+  },
+  "test_image_level": {
+    "tp": 2216,
+    "fp": 1516,
+    "fn": 160,
+    "tn": 520,
+    "precision": 0.5937834941050375,
+    "recall": 0.9326599326599326,
+    "fpr": 0.7445972495088409
+  },
+  "n_train": 22526,
+  "n_tune": 2502,
+  "n_test": 4535,
+  "obj_weight": 20.0,
+  "epochs": 30
+}

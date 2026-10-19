@@ -1,0 +1,46 @@
+model=teacher MAC=20.95M params=56577 train=22526 tune=2502 test=4535
+ep  1 loss 0.4566 tune F1 0.314 (thr 0.55) P 0.340 R 0.292 [788s]
+ep  2 loss 0.3138 tune F1 0.335 (thr 0.65) P 0.436 R 0.272 [659s]
+ep  3 loss 0.2988 tune F1 0.356 (thr 0.55) P 0.443 R 0.297 [312s]
+ep  4 loss 0.2921 tune F1 0.369 (thr 0.65) P 0.468 R 0.305 [832s]
+ep  5 loss 0.2877 tune F1 0.377 (thr 0.65) P 0.507 R 0.299 [822s]
+ep  6 loss 0.2811 tune F1 0.382 (thr 0.65) P 0.498 R 0.309 [869s]
+ep  7 loss 0.2803 tune F1 0.383 (thr 0.65) P 0.505 R 0.308 [944s]
+ep  8 loss 0.2786 tune F1 0.383 (thr 0.65) P 0.502 R 0.310 [927s]
+{
+  "model": "teacher",
+  "macs": 20954880,
+  "params": 56577,
+  "threshold": 0.6499999999999999,
+  "tune_f1": 0.3829850303838743,
+  "test_coco_val2017": {
+    "tp": 1843,
+    "fp": 2504,
+    "fn": 4433,
+    "precision": 0.42397055440533704,
+    "recall": 0.29365838113448056,
+    "f1": 0.34698296149863506
+  },
+  "test_dist1cell": {
+    "tp": 1404,
+    "fp": 2970,
+    "fn": 4872,
+    "precision": 0.32098765432098764,
+    "recall": 0.2237093690248566,
+    "f1": 0.26366197183098594
+  },
+  "test_image_level": {
+    "tp": 1853,
+    "fp": 867,
+    "fn": 523,
+    "tn": 1169,
+    "precision": 0.68125,
+    "recall": 0.7798821548821548,
+    "fpr": 0.4258349705304519
+  },
+  "n_train": 22526,
+  "n_tune": 2502,
+  "n_test": 4535,
+  "obj_weight": 20.0,
+  "epochs": 8
+}
