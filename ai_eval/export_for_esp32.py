@@ -23,7 +23,7 @@ import shutil
 import numpy as np
 import cv2
 
-AI_EVAL_DIR = "/working_dir/c_7f01f52b58fcd382/project/adaremac_handover_complete/adaremac/ai_eval"
+AI_EVAL_DIR = "C:/Users/nhath/Documents/adaremac/ai_eval"
 sys.path.insert(0, AI_EVAL_DIR)
 
 from approx_mul import signed_lut
@@ -31,8 +31,8 @@ from qnet import (float_forward, quantize_input, _sym_scale, _requant_params,
                   im2col, maxpool2, _to_map, _requant, mac)
 
 MODEL_PATH = os.path.join(AI_EVAL_DIR, "model_fp32.npz")
-OUT_HEADER_1 = "/working_dir/c_7f01f52b58fcd382/project/adaremac_handover_complete/adaremac/firmware_arduino/1_test_camera_ov5640/ai_model_data.h"
-OUT_HEADER_2 = "/working_dir/c_7f01f52b58fcd382/project/adaremac_handover_complete/adaremac/firmware_arduino/2_adaremac_main/ai_model_data.h"
+OUT_HEADER_1 = "firmware_arduino/1_test_camera_ov5640/ai_model_data.h"
+OUT_HEADER_2 = "firmware_arduino/2_adaremac_main/ai_model_data.h"
 
 # =========================================================================================
 # TRỌNG SỐ PRE-TRAINED GỐC TRÍCH XUẤT TỪ EDGE IMPULSE FOMO (tflite_learn_3_compiled.cpp)
