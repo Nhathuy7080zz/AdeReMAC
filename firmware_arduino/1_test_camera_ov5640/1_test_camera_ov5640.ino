@@ -1263,11 +1263,9 @@ static void configure_ov5640_cool_30fps(sensor_t *s, framesize_t fs, int jpeg_qu
     s->set_vflip(s, 1);
 
     if (s->id.PID == OV5640_PID && s->set_reg && s->get_reg) {
-        // MỞ KHÓA LUỒNG STREAM DVP (xóa bộ che khung 0x4202=0x00 và đảm bảo 0x3008=0x02 Normal Mode)
-        s->set_reg(s, 0x3008, 0xFF, 0x02);
-        s->set_reg(s, 0x4201, 0xFF, 0x00);
-        s->set_reg(s, 0x4202, 0xFF, 0x00);
-        s->set_reg(s, 0x302C, 0xFF, 0x42);
+        // V4 SAFETY: esp32-camera initializes stream and DVP timing.
+        // 0x4202 is a FRAME MASK control, not a MIPI PHY power switch.
+        // Avoid raw 0x3008/0x4201/0x4202/0x302C writes by default.
 
         // Chỉ tắt bit 2 (Night mode frame drop) trong AEC CTRL00 (0x3A00) và khóa trần phơi sáng <= VTS - 4
         int aec_ctrl = s->get_reg(s, 0x3A00, 0xFF);
