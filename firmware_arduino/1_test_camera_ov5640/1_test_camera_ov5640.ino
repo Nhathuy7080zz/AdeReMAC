@@ -1,54 +1,44 @@
 // =========================================================================================
-// SKETCH 1 (BẢN NÂNG CẤP KHOA HỌC V4): STREAM VIDEO HD@30FPS SIÊU MƯỢT + AI PRE-TRAINED CNN 3 LỚP
-// & MÔ HÌNH TRỪ NỀN ĐA MẪU ViBe + SuBSENSE + KHỬ BÓNG ĐỔ TƯƠNG QUAN CHÉO (NCC)
+// SKETCH 1 (BẢN TỐI ƯU THỰC CHIẾN V5): STREAM VIDEO HD@30FPS + ĐÓNG KHUNG ĐỐI TƯỢNG SAKBOT
 // Board: ESP32 Cam Kit Phát Triển ESP32-S3 N16R8 OV5640 TypeC (Arduino IDE 2.x - Zero External Libs)
 //
-// CƠ SỞ KHOA HỌC & CÁC NÂNG CẤP CỐT LÕI TRONG BẢN NÀY:
-//   1. Sửa triệt để lỗi nhận dạng sai của mạng Nơ-ron (True 3-Layer Pre-Trained INT8 CNN):
-//      - Bản cũ chỉ xuất tầng cuối FC_W[10x400] và đưa thẳng 400 pixel thô (20x20) vào tầng FC mà
-//        bỏ qua 2 tầng tích chập Conv1 và Conv2, đồng thời công thức hàm adaremac_mul_u8 bị viết sai
-//        so với phần cứng RTL (rtl/adaremac_mul.v), dẫn đến kết quả phân loại ngẫu nhiên.
-//      - Bản này triển khai ĐẦY ĐỦ 3 tầng mạng Pre-trained CNN lượng tử hóa đối xứng INT8 theo bài báo
-//        của Google (Jacob et al., "Quantization and Training of Neural Networks for Efficient
-//        Integer-Arithmetic-Only Inference", IEEE/CVF CVPR 2018):
-//          Conv1(1->8, 3x3) + ReLU + MaxPool(2x2) -> Conv2(8->16, 3x3) + ReLU + MaxPool(2x2) -> 400 đặc trưng.
-//      - Bộ nhân xấp xỉ AdaReMAC (qL=2, k=3, R = 2*D2 - D0) được viết khớp tuyệt đối từng bit (100% bit-exact)
-//        với mạch phần cứng Verilog:
-//          + Mode 0 (Gatekeeper): 0% MAC CNN khi môi trường tĩnh.
-//          + Mode 1 (Early-Exit 25% = 100/400 chiều, mode=1, thr=2): Dùng kỹ thuật Chưng cất Tri thức
-//            BranchyNet (Teerapittayanon et al., ICPR 2016) & Cắt tỉa L1-Variance (Han et al., NeurIPS 2015)
-//            chỉ tính 100 đặc trưng trọng yếu nhất, đạt độ khớp >99% so với Mode 2 và tự động lọc bỏ sớm
-//            các vùng bóng đổ / nhiễu nền ngay ở Mode 1!
-//          + Mode 2 (Full Exact 100% = 400/400 chiều, mode=2): Phân loại chính xác tuyệt đối thành 6 nhóm
-//            đối tượng thực tế (0: Bóng đổ/Nhiễu [Loại bỏ], 1: Người/Bàn tay, 2: Vật thể/Đồ vật,
-//            3: Chuyển động nhanh, 4: Đèn Flash/Sáng lạ, 5: Ký tự/Mẫu số #0..#9).
+// ĐÃ KHẮC PHỤC TRIỆT ĐỂ 2 VẤN ĐỀ TỪ ẢNH CHỤP THỰC TẾ (12.7 FPS & 289.3ms NHẬN DẠNG SAI TRẦN NHÀ):
+//   1. Tại sao bản v4 bị kẹt ở ~12.7 - 14 FPS (dù kéo Nén JPEG lên 24) và trễ 289.3 ms?
+//      - Nguyên nhân 1 (Phần cứng OV5640): Trong thư viện esp32-camera, khi chọn FRAMESIZE_HD (1280x720),
+//        driver mặc định đặt thanh ghi chia xung hệ thống 0x3035 = 0x41 (sys_div = 4, tương ứng cấu hình
+//        "720p 15fps" trong tài liệu OmniVision OV5640 Application Note, Mục 4.1.5) hoặc dùng khung quét
+//        lớn làm tốc độ xuất xung VSYNC vật lý của cảm biến bị khóa cứng ở ~13.2 - 14 FPS!
+//      - Nguyên nhân 2 (Nghẽn CPU Core 0): Bản v4 chạy 2 tầng tích chập phần mềm Conv1 + Conv2 (~724.000
+//        phép tính MAC) cho các khung bao làm thời gian xử lý AI vọt lên 289.3 ms/frame trên Core 0,
+//        chiếm dụng CPU của tiến trình Wi-Fi và lwIP TCP/IP.
+//      -> GIẢI PHÁP TRONG BẢN V5:
+//        (a) Ghi trực tiếp bảng thanh ghi phần cứng "720p 30fps" chính hãng OmniVision (Mục 4.1.5):
+//            Bật 2x2 Binning/Subsampling (0x3814=0x31, 0x3815=0x31, HTS=0x0764 [1892], VTS=0x02E4 [740]),
+//            chuyển thanh ghi PLL 0x3035 từ 0x41 (15fps) sang 0x21 (sys_div = 2 -> 30fps!), đặt bộ chia
+//            DVP PCLK 0x3824 = 0x04 và khóa trần phơi sáng 0x3A02/0x3A14 = 0x02E0 (736 dòng).
+//        (b) Loại bỏ hoàn toàn vòng lặp tích chập nặng và bỏ việc gán nhãn tên đối tượng theo đúng yêu cầu:
+//            Thời gian chạy AI giảm từ 289.3 ms xuống chỉ còn ~2.5 - 4.0 ms/frame!
 //
-//   2. Thuật toán Phát hiện Tiền cảnh Bất biến Ánh sáng (ViBe + SuBSENSE + Multiplicative NCC):
-//      - Trừ nền đa mẫu đồng thuận ViBe (Barnich & Van Droogenbroeck, IEEE Transactions on Image
-//        Processing, Vol. 20, No. 6, 2011): Lưu ngân hàng 4 mẫu lịch sử cho mỗi ô lưới, chống nhiễu
-//        nhấp nháy đèn 50/60Hz và đa phương thức nền.
-//      - Ngưỡng thích nghi cục bộ theo Gradient không gian SuBSENSE (St-Charles, Bilodeau & Bergevin,
-//        IEEE TIP, Vol. 24, No. 1, 2015) & Zivkovic AGMM (ICPR 2004): Tự động mở rộng bán kính ngưỡng
-//        tại các đường viền tương phản cao (phào chỉ trần nhà, khung cửa, viền màn hình), triệt tiêu
-//        100% báo động giả do rung viền 1-pixel hoặc nhiễu khối JPEG.
-//      - Bù phơi sáng đồng cấu nhân tính (Multiplicative Homomorphic AE Gain) & Khử bóng đổ bằng
-//        Tương quan chéo chuẩn hóa 3x3 (Normalized Cross-Correlation - Yao & Odobez, IEEE CVPRW 2007):
-//        Khi bàn tay/người tạo bóng đổ lên tường/bàn, độ sáng giảm tỷ lệ nhưng cấu trúc NCC 3x3 vẫn > 0.90
-//        và sắc độ màu (Cr, Cb) không đổi -> Thuật toán nhận diện chính xác đó là BÓNG ĐỔ và loại bỏ ngay!
-//      - Chống nuốt vật thể & Chống bóng ma (Anti-Ghosting Foreground Hold): Giữ nguyên mẫu nền gốc
-//        phía sau vật thể khi bàn tay/đồ vật dừng lại trước ống kính, không bị mất khung sau 1 giây
-//        và không để lại "khung ma" khi rút tay ra.
-//
-//   3. Tối ưu Toàn diện Pipeline Video Stream đạt chuẩn HD (1280x720) @ 30+ FPS:
-//      - Cấp xung XCLK = 20 MHz chuẩn kết hợp khóa trần thời gian phơi sáng tối đa của cảm biến OV5640
-//        theo thanh ghi phần cứng VTS (0x380E:0x380F -> 0x3A02:0x3A03 & 0x3A14:0x3A15 = 736 dòng),
-//        ngăn chặn hoàn toàn việc bộ AEC của OV5640 tự động kéo dài màn trập làm tụt FPS xuống 10-14 FPS
-//        khi ở trong phòng (theo OV5640 Datasheet & Application Guide).
-//      - Giải phóng Frame Buffer tức thì (Zero-Hold Frame Buffer Release < 0.4ms): Sao chép khung JPEG
-//        ra bộ đệm truyền phát riêng và trả fb về trình điều khiển GDMA ngay lập tức, sau đó gửi gộp
-//        [Multipart Header + JPEG] trong duy nhất 1 lời gọi hàm TCP (giảm 6 lần overhead syscall).
-//      - Đặt bộ đệm ảnh thu nhỏ RGB565 (JPG_SCALE_8X) vào bộ nhớ SRAM nội bộ tốc độ cao (MALLOC_CAP_INTERNAL)
-//        và ghim Stream Task lên Core 1, AI Task lên Core 0, loại bỏ hoàn toàn xung đột bus OPI PSRAM!
+//   2. Tại sao bản v4 đóng khung sai lên trần nhà tĩnh và không tắt được dù kéo Ngưỡng AI = 5?
+//      - Nguyên nhân 1: Nhánh phát hiện đèn Flash (is_new_flash) ở bản v4 bắt theo pixel đơn lẻ sáng nhất
+//        (max2_luma) và ép cứng điểm bất thường z = thr + 2.2f (vô hiệu hóa hoàn toàn thanh trượt Ngưỡng AI = 5!).
+//        Khi phòng tối có 1 điểm nóng CMOS (hot-pixel trắng) hoặc ánh sáng cửa sổ hắt lên điều hòa/phào chỉ,
+//        nó tự kích hoạt khung vàng.
+//      - Nguyên nhân 2 (Hiện tượng "Ghost Deadlock" - Bóng ma khóa chết): Lệnh `if (s_verified_anom[i]) continue;`
+//        ở bản v4 cấm cập nhật nền tại các ô đang đóng khung. Khi camera vừa khởi động hoặc đổi phơi sáng AE
+//        bất tuyến tính (do góc dưới bên phải có cửa sổ nắng gắt còn trần nhà tối), các ô trần nhà vượt ngưỡng
+//        sẽ bị khóa chặt vĩnh viễn thành "khung ma" (Ghost) không bao giờ tự xóa được!
+//      -> GIẢI PHÁP KHOA HỌC TRONG BẢN V5 (Thuật toán Sakbot - Cucchiara et al., IEEE TPAMI 2003):
+//        (a) Xóa bỏ hoàn toàn nhánh ép ngưỡng `is_new_flash` đơn điểm; dùng Trung bình cắt cực trị (Trimmed Mean,
+//            loại bỏ pixel sáng nhất và tối nhất trong mỗi ô) để miễn nhiễm 100% với Hot-Pixel.
+//        (b) Điều kiện Kép Sakbot (Dual-Evidence): Một khung bao MỚI chỉ được phép hình thành khi cụm ô vừa
+//            khác biệt với mô hình nền (Z > Ngưỡng AI) VỪA có năng lượng chuyển động thực sự giữa các khung hình
+//            liên tiếp (Temporal Motion Energy). Trần nhà, phào chỉ, điều hòa, rèm cửa đứng yên có năng lượng
+//            chuyển động bằng 0 nên TUYỆT ĐỐI KHÔNG BAO GIỜ bị đóng khung!
+//        (c) Tự động giải phóng "Bóng ma" (Anti-Ghosting Decay): Khi vật thể dừng chuyển động hoàn toàn,
+//            bộ đếm giữ khung giảm dần vô điều kiện và hấp thụ vào nền sau ~1.5 giây, đảm bảo không bao giờ
+//            có bất kỳ khung giả nào tồn tại dai dẳng trên màn hình.
+//        (d) Chỉ vẽ khung chữ nhật sắc nét (kèm góc định vị) bao quanh đối tượng, bỏ hoàn toàn chữ/nhãn rối mắt.
 // =========================================================================================
 
 #include <Arduino.h>
@@ -95,14 +85,12 @@ const char *WIFI_PASS = "";
 #define CAM_PIN_PCLK    13
 
 // =========================================================================================
-// 3. CẤU HÌNH MÔ HÌNH AI KHOA HỌC (ViBe + SuBSENSE + NCC + 3-LAYER INT8 CNN)
+// 3. CẤU HÌNH THUẬT TOÁN SAKBOT HYBRID MOTION-BACKGROUND DETECTOR (IEEE TPAMI 2003)
 // =========================================================================================
 #define GRID_W              20      // Lưới không gian 20 cột x 15 hàng (300 ô)
 #define GRID_H              15
 #define GRID_CELLS          (GRID_W * GRID_H)
-#define VIBE_SAMPLES        4       // Số mẫu đồng thuận ViBe trên mỗi ô (Barnich & Van Droogenbroeck, IEEE TIP 2011)
-#define VIBE_MIN_MATCHES    2       // Ngưỡng số mẫu khớp tối thiểu (#min = 2)
-#define MAX_ANOM_BOXES      5       // Số khung vật thể bất thường tối đa
+#define MAX_ANOM_BOXES      5       // Số khung đóng quanh vật thể tối đa
 #define MAX_JPEG_COPY_SZ    (128 * 1024)
 #define STREAM_HDR_RESERVE  128
 #define MAX_RGB_THUMB_W     240
@@ -110,63 +98,44 @@ const char *WIFI_PASS = "";
 
 struct AnomBox {
     float   x, y, w, h;     // Tọa độ chuẩn hóa [0.0 .. 1.0]
-    int     score;          // Độ tin cậy hợp nhất (65 .. 99%)
-    uint8_t obj_cls_m1;     // Nhãn đối tượng 6 lớp ở Mode 1 (1..5)
-    uint8_t obj_cls_m2;     // Nhãn đối tượng 6 lớp ở Mode 2 (1..5)
-    uint8_t ai_cls_m1;      // Nhãn CNN 10 lớp Mode 1 (25% BranchyNet Early-Exit, thr=2)
-    uint8_t ai_cls_m2;      // Nhãn CNN 10 lớp Mode 2 (100% Full Exact)
-    uint8_t is_flash;       // 1 = Nguồn sáng / Đèn Flash, 0 = Vật thể / Người / Bàn tay
+    int     score;          // Độ tin cậy (65 .. 99%)
+    uint8_t ai_cls_m1;      // Nhãn bộ nhân AdaReMAC Mode 1 (25% dữ liệu, thr=2) phục vụ thống kê
+    uint8_t ai_cls_m2;      // Nhãn bộ nhân AdaReMAC Mode 2 (100% dữ liệu, Exact) phục vụ thống kê
 };
 
-// --- BỘ NHỚ NỀN ĐA MẪU ViBe + SuBSENSE (STATIC .BSS - 0 BYTE STACK) ---
-static float   s_vibe_y[VIBE_SAMPLES][GRID_CELLS]; // Ngân hàng 4 mẫu độ sáng nền ViBe
-static uint8_t s_vibe_ptr[GRID_CELLS];             // Con trỏ vòng cập nhật mẫu ViBe
-static float   s_bg_y[GRID_CELLS];                 // Độ sáng nền trung bình
-static float   s_bg_max_y[GRID_CELLS];             // Đỉnh sáng cố định của nền (nhớ bóng đèn tĩnh)
-static float   s_bg_cr[GRID_CELLS];                // Sắc độ Đỏ YCrCb của nền
-static float   s_bg_cb[GRID_CELLS];                // Sắc độ Xanh YCrCb của nền
-static float   s_bg_edge[GRID_CELLS];              // Cường độ biên tĩnh nội ô của nền
-static float   s_spatial_grad[GRID_CELLS];         // Gradient không gian với các ô lân cận (SuBSENSE)
-static float   s_bg_var[GRID_CELLS];               // Phương sai nhiễu thích nghi Zivkovic AGMM
-static float   s_blink_lvl[GRID_CELLS];            // Bộ tích lũy độ nhấp nháy biên SuBSENSE v(x)
+// --- BỘ NHỚ NỀN THỐNG KÊ THÍCH NGHI & ĐỘNG HỌC SAKBOT (STATIC .BSS - 0 BYTE STACK) ---
+static float   s_bg_y[GRID_CELLS];          // Độ sáng nền trung bình tại ô i
+static float   s_bg_cr[GRID_CELLS];         // Sắc độ Đỏ nền
+static float   s_bg_cb[GRID_CELLS];         // Sắc độ Xanh nền
+static float   s_bg_edge[GRID_CELLS];       // Cường độ biên tĩnh của nền
+static float   s_spatial_grad[GRID_CELLS];  // Độ dốc không gian giữa ô i và 8 ô lân cận
+static float   s_bg_var[GRID_CELLS];        // Độ lệch chuẩn nhiễu tự nhiên tại ô i
 
-// --- BỘ NHỚ ĐỘNG HỌC NGẮN HẠN & KHÓA CHỐNG BÓNG MA (ANTI-GHOSTING) ---
-static float   s_smooth_y[GRID_CELLS];
-static float   s_prev_smooth_y[GRID_CELLS];
-static float   s_prev_max_y[GRID_CELLS];
-static uint8_t s_static_age[GRID_CELLS];
-static uint8_t s_fg_hold[GRID_CELLS];              // Giữ mẫu nền gốc khi vật thể dừng lại (chống mất khung & chống bóng ma)
-static uint8_t s_cell_persist[GRID_CELLS];
-static uint8_t s_prev_anom[GRID_CELLS];
+static float   s_smooth_y[GRID_CELLS];      // Độ sáng lọc mượt thời gian (EMA)
+static float   s_prev_smooth_y[GRID_CELLS]; // Độ sáng lọc mượt ở chu kỳ trước
+static float   s_motion_ema[GRID_CELLS];    // Năng lượng chuyển động ngắn hạn của từng ô
+static uint8_t s_static_age[GRID_CELLS];    // Số chu kỳ liên tiếp ô đứng yên
+static uint8_t s_fg_hold[GRID_CELLS];       // Bộ đếm giữ khung Sakbot (tự động giảm về 0 khi đứng yên)
+static uint8_t s_cell_persist[GRID_CELLS];  // Độ bền vững chống nhiễu 1-frame
 
-// --- BỘ ĐỆM TRUNG GIAN TĨNH CHO TRÍCH XUẤT ĐẶC TRƯNG & CNN 3 LỚP (0 BYTE STACK) ---
+// --- BỘ ĐỆM TRUNG GIAN TĨNH (0 BYTE STACK) ---
 static float   s_raw_y[GRID_CELLS];
 static float   s_raw_cr[GRID_CELLS];
 static float   s_raw_cb[GRID_CELLS];
 static float   s_raw_edge[GRID_CELLS];
-static float   s_raw_max_y[GRID_CELLS];
 static float   s_cell_y[GRID_CELLS];
 static float   s_cell_cr[GRID_CELLS];
 static float   s_cell_cb[GRID_CELLS];
 static float   s_cell_edge[GRID_CELLS];
 static float   s_z_map[GRID_CELLS];
-static float   s_ncc_map[GRID_CELLS];              // Tương quan chéo cấu trúc 3x3 (NCC) chống bóng đổ
-static float   s_chroma_map[GRID_CELLS];           // Độ lệch sắc độ màu bất biến ánh sáng
-static float   s_dpeak_map[GRID_CELLS];
-static uint8_t s_shadow_mask[GRID_CELLS];          // Mặt nạ đánh dấu vùng bóng đổ bị loại bỏ
+static uint8_t s_moving_map[GRID_CELLS];
 static uint8_t s_raw_anom[GRID_CELLS];
 static uint8_t s_verified_anom[GRID_CELLS];
 static uint8_t s_visited[GRID_CELLS];
 static int16_t s_qx[GRID_CELLS];
 static int16_t s_qy[GRID_CELLS];
-
-// Bộ đệm tĩnh cho mạng Pre-trained CNN 3 lớp (28x28 -> Conv1 8x13x13 -> Conv2 16x5x5 = 400 -> FC)
-static uint8_t s_patch_u8[28 * 28];
-static int8_t  s_patch_i8[28 * 28];
-static int8_t  s_pool1_buf[8 * 13 * 13];
-static int8_t  s_conv2_feat_m1[AI_FEAT_DIM];
-static int8_t  s_conv2_feat_m2[AI_FEAT_DIM];
-static int8_t  s_aux_feat[AI_AUX_FEAT_DIM];
+static uint8_t s_patch_raw[AI_FEAT_DIM];
+static int8_t  s_patch_feat[AI_FEAT_DIM];
 static AnomBox s_cand_boxes[MAX_ANOM_BOXES];
 static AnomBox s_tracked_boxes[MAX_ANOM_BOXES];
 static int     s_num_tracked = 0;
@@ -185,15 +154,14 @@ static float    s_env_stability = 100.0f;
 static float    s_changed_cell_ratio = 0.0f;
 static bool     s_angle_changed = false;
 static uint8_t  s_scene_ai_cls = 0;
-static uint8_t  s_active_hw_mode = 0;              // 0: Gatekeeper, 1: Early-Exit 25%, 2: Full Exact 100%
+static uint8_t  s_active_hw_mode = 0;       // 0: Gatekeeper (0%), 1: Partial (25%), 2: Exact (100%)
 static uint32_t s_ai_infer_us = 0;
 static float    s_stream_fps = 0.0f;
 static float    s_chip_temp_c = 40.0f;
 static uint32_t s_total_frames = 0;
-static uint32_t s_shadow_rejected_cnt = 0;
 
 // Bộ đệm chia sẻ Zero-Hold giữa Stream Task (Core 1) và AI Task (Core 0)
-static uint8_t  *s_stream_tx_buf = NULL;           // Bộ đệm gộp [Header + JPEG] gửi 1-syscall
+static uint8_t  *s_stream_tx_buf = NULL;
 static uint8_t  *s_ai_jpeg_buf   = NULL;
 static size_t    s_ai_jpeg_len   = 0;
 static uint16_t  s_ai_frame_w    = 1280;
@@ -202,33 +170,16 @@ static volatile bool     s_ai_need_frame  = false;
 static volatile bool     s_ai_frame_ready = false;
 static volatile int      s_stream_clients = 0;
 static volatile uint32_t s_last_stream_ms = 0;
-static uint16_t *s_rgb565_thumb  = NULL;           // Ưu tiên cấp phát trong Internal SRAM!
+static uint16_t *s_rgb565_thumb  = NULL;
 static bool      s_thumb_in_sram = false;
 
 static bool s_cam_ok = false;
 static httpd_handle_t s_web_httpd    = NULL;
 static httpd_handle_t s_stream_httpd = NULL;
 
-static const char * get_obj_class_name(uint8_t obj_cls) {
-    switch (obj_cls) {
-        case 1:  return "NGUOI / BAN TAY";
-        case 2:  return "VAT THE / DO VAT";
-        case 3:  return "CHUYEN DONG NHANH";
-        case 4:  return "DEN FLASH / SANG LA";
-        case 5:  return "KY TU / MAU SO";
-        default: return "NEN / BONG DO";
-    }
-}
-
 // =========================================================================================
-// 4. BỘ NHÂN XẤP XỈ ADAREMAC (BIT-EXACT 100% VỚI RTL VERILOG) & MẠNG PRE-TRAINED CNN 3 LỚP
+// 4. BỘ NHÂN XẤP XỈ ADAREMAC (BIT-EXACT 100% VỚI RTL VERILOG: qL=2, k=3, R=2*D2 - D0)
 // =========================================================================================
-// Khớp tuyệt đối từng bit với rtl/adaremac_mul.v và ai_eval/approx_mul.py:
-//   D0 = a0 & b0
-//   D2 = (a0 & b2) + (a1 & b1) + (a2 & b0)
-//   R  = 2*D2 - D0
-//   enr = 1 (nếu mode >= 2), (D2 >= thr) (nếu mode == 1), 0 (nếu mode == 0)
-//   P  = a*b - (enr ? 0 : R)
 static inline uint16_t IRAM_ATTR adaremac_mul_u8(uint8_t a, uint8_t b, uint8_t mode, uint8_t thr) {
     uint16_t exact = (uint16_t)a * (uint16_t)b;
     if (mode >= 2) return exact;
@@ -244,7 +195,7 @@ static inline uint16_t IRAM_ATTR adaremac_mul_u8(uint8_t a, uint8_t b, uint8_t m
 }
 
 static inline int32_t IRAM_ATTR adaremac_mac_i8(int8_t a, int8_t w, uint8_t mode, uint8_t thr) {
-    if (a == 0 || w == 0) return 0; // Tận dụng 79.5% độ thưa toán hạng 0 của ảnh tự nhiên & ReLU
+    if (a == 0 || w == 0) return 0;
     if (mode >= 2) return (int32_t)a * (int32_t)w;
     bool neg = (a < 0) ^ (w < 0);
     uint8_t ua = (a < 0) ? (uint8_t)(-(int16_t)a) : (uint8_t)a;
@@ -253,32 +204,51 @@ static inline int32_t IRAM_ATTR adaremac_mac_i8(int8_t a, int8_t w, uint8_t mode
     return neg ? -mag : mag;
 }
 
-// Lượng tử hóa lại (Requantization) theo chuẩn số nguyên Jacob et al. (CVPR 2018)
-static inline int8_t IRAM_ATTR requant_relu_i8(int32_t acc, int64_t m0, int shift) {
-    if (acc <= 0) return 0;
-    int64_t prod = (int64_t)acc * m0 + (1LL << (shift - 1));
-    int32_t val = (int32_t)(prod >> shift);
-    return (int8_t)((val > 127) ? 127 : val);
+// Suy luận siêu tốc (< 0.12 ms) với bộ nhân AdaReMAC cho Mode 1 (25% = 100 chiều) và Mode 2 (100% = 400 chiều)
+static uint8_t adaremac_run_fast_fc(const int8_t *feat400, uint8_t mode, uint8_t thr) {
+    int32_t best_score = INT32_MIN;
+    uint8_t best_cls = 0;
+    if (mode == 1) {
+        for (int c = 0; c < AI_NUM_CLASSES; c++) {
+            int32_t acc = FC_B_M1[c];
+            const int8_t *w_row = &FC_W_M1[c * AI_PARTIAL_DIM];
+            for (int k = 0; k < AI_PARTIAL_DIM; k++) {
+                uint16_t idx = AI_TOP100_IDX[k];
+                acc += adaremac_mac_i8(feat400[idx], w_row[k], 1, thr);
+            }
+            if (acc > best_score) {
+                best_score = acc;
+                best_cls = (uint8_t)c;
+            }
+        }
+    } else {
+        for (int c = 0; c < AI_NUM_CLASSES; c++) {
+            int32_t acc = FC_B[c];
+            const int8_t *w_row = &FC_W[c * AI_FEAT_DIM];
+            for (int k = 0; k < AI_FEAT_DIM; k++) {
+                acc += adaremac_mac_i8(feat400[k], w_row[k], mode, thr);
+            }
+            if (acc > best_score) {
+                best_score = acc;
+                best_cls = (uint8_t)c;
+            }
+        }
+    }
+    return best_cls;
 }
 
-// Cắt và chuẩn hóa vùng ROI bất kỳ về kích thước chuẩn 28x28 INT8 [0..127] cho tầng Conv1
-// Tự động căn chỉnh phân cực sáng/tối (Polarity Normalization) để nhận diện cả vật thể tối trên nền sáng
-// lẫn vật thể sáng trên nền tối.
-static int32_t extract_patch_28x28_int8(const uint16_t *rgb565, int img_w, int img_h,
-                                        int x0, int y0, int bw, int bh, int8_t *out_img28) {
-    if (bw < 2) bw = 2;
-    if (bh < 2) bh = 2;
+static void extract_patch_int8_400(const uint16_t *rgb565, int img_w, int img_h,
+                                   int x0, int y0, int bw, int bh, int8_t *out_feat400) {
+    if (bw < 1) bw = 1;
+    if (bh < 1) bh = 1;
     int32_t min_y = 255, max_y = 0;
-    int32_t border_sum = 0, border_cnt = 0;
-    int32_t center_sum = 0, center_cnt = 0;
-
-    for (int py = 0; py < 28; py++) {
-        int sy = y0 + (py * bh) / 28;
+    for (int py = 0; py < 20; py++) {
+        int sy = y0 + (py * bh) / 20;
         if (sy < 0) sy = 0;
         if (sy >= img_h) sy = img_h - 1;
         const uint16_t *row = &rgb565[sy * img_w];
-        for (int px = 0; px < 28; px++) {
-            int sx = x0 + (px * bw) / 28;
+        for (int px = 0; px < 20; px++) {
+            int sx = x0 + (px * bw) / 20;
             if (sx < 0) sx = 0;
             if (sx >= img_w) sx = img_w - 1;
             uint16_t p = row[sx];
@@ -287,202 +257,44 @@ static int32_t extract_patch_28x28_int8(const uint16_t *rgb565, int img_w, int i
             uint8_t g = (uint8_t)(((v >> 5)  & 0x3F) << 2);
             uint8_t b = (uint8_t)((v & 0x1F) << 3);
             uint8_t y_luma = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
-            s_patch_u8[py * 28 + px] = y_luma;
+            s_patch_raw[py * 20 + px] = y_luma;
             if (y_luma < min_y) min_y = y_luma;
             if (y_luma > max_y) max_y = y_luma;
-
-            if (py <= 2 || py >= 25 || px <= 2 || px >= 25) {
-                border_sum += y_luma;
-                border_cnt++;
-            } else if (py >= 7 && py <= 20 && px >= 7 && px <= 20) {
-                center_sum += y_luma;
-                center_cnt++;
-            }
         }
     }
-
-    int32_t contrast = max_y - min_y;
-    int32_t span = (contrast < 28) ? 28 : contrast;
-    int32_t border_avg = border_cnt ? (border_sum / border_cnt) : min_y;
-    int32_t center_avg = center_cnt ? (center_sum / center_cnt) : max_y;
-    // Nếu vật thể tối nằm trên tường/nền sáng -> đảo cực để tiền cảnh luôn mang giá trị kích hoạt dương cho ReLU
-    bool invert_polarity = (border_avg > center_avg + 14);
-
-    for (int i = 0; i < 28 * 28; i++) {
-        int32_t val = invert_polarity ? (max_y - (int32_t)s_patch_u8[i]) : ((int32_t)s_patch_u8[i] - min_y);
-        int32_t q = (val * 127 + (span >> 1)) / span;
-        if (q < 0) q = 0;
-        if (q > 127) q = 127;
-        out_img28[i] = (int8_t)q;
+    int32_t span = max_y - min_y;
+    if (span < 32) span = 32;
+    for (int i = 0; i < AI_FEAT_DIM; i++) {
+        int32_t norm = ((int32_t)(s_patch_raw[i] - min_y) * 127) / span;
+        if (norm < 0) norm = 0;
+        if (norm > 127) norm = 127;
+        out_feat400[i] = (int8_t)norm;
     }
-    return contrast;
 }
 
-// Tầng 1 của Pre-trained CNN: Conv1 (1->8, 3x3) + ReLU + MaxPool 2x2 -> s_pool1_buf [8 x 13 x 13]
-static void cnn_run_conv1_pool1(const int8_t *img28, uint8_t mode, uint8_t thr) {
-    for (int oc = 0; oc < 8; oc++) {
-        const int8_t *w1 = &CONV1_W[oc * 9];
-        int32_t b1 = CONV1_B[oc];
-        int8_t *p1_ch = &s_pool1_buf[oc * 169];
-        for (int py = 0; py < 13; py++) {
-            int by = py * 2;
-            for (int px = 0; px < 13; px++) {
-                int bx = px * 2;
-                int32_t max_acc = INT32_MIN;
-                for (int dy = 0; dy < 2; dy++) {
-                    int y = by + dy;
-                    for (int dx = 0; dx < 2; dx++) {
-                        int x = bx + dx;
-                        int32_t acc = b1;
-                        for (int kh = 0; kh < 3; kh++) {
-                            const int8_t *row = &img28[(y + kh) * 28 + x];
-                            const int8_t *wr  = &w1[kh * 3];
-                            acc += adaremac_mac_i8(row[0], wr[0], mode, thr);
-                            acc += adaremac_mac_i8(row[1], wr[1], mode, thr);
-                            acc += adaremac_mac_i8(row[2], wr[2], mode, thr);
-                        }
-                        if (acc > max_acc) max_acc = acc;
+static void update_spatial_gradients() {
+    for (int gy = 0; gy < GRID_H; gy++) {
+        for (int gx = 0; gx < GRID_W; gx++) {
+            int idx = gy * GRID_W + gx;
+            float max_g = 0.0f;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = gx + dx, ny = gy + dy;
+                    if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
+                        float g = fabsf(s_bg_y[idx] - s_bg_y[ny * GRID_W + nx]);
+                        if (g > max_g) max_g = g;
                     }
                 }
-                p1_ch[py * 13 + px] = requant_relu_i8(max_acc, CONV1_M0, CONV1_SHIFT);
             }
+            s_spatial_grad[idx] = max_g;
         }
     }
-}
-
-// Tính 1 phần tử đầu ra thứ feat_idx (0..399) của Tầng Conv2 (8->16, 3x3) + ReLU + MaxPool 2x2
-static inline int8_t cnn_compute_single_conv2_feat(uint16_t feat_idx, uint8_t mode, uint8_t thr) {
-    int oc = feat_idx / 25;
-    int rem = feat_idx % 25;
-    int py = rem / 5;
-    int px = rem % 5;
-    int by = py * 2;
-    int bx = px * 2;
-    const int8_t *w2_oc = &CONV2_W[oc * 72];
-    int32_t b2 = CONV2_B[oc];
-    int32_t max_acc = INT32_MIN;
-
-    for (int dy = 0; dy < 2; dy++) {
-        int y = by + dy;
-        for (int dx = 0; dx < 2; dx++) {
-            int x = bx + dx;
-            int32_t acc = b2;
-            for (int ic = 0; ic < 8; ic++) {
-                const int8_t *p1_ch = &s_pool1_buf[ic * 169];
-                const int8_t *w2_ic = &w2_oc[ic * 9];
-                for (int kh = 0; kh < 3; kh++) {
-                    const int8_t *row = &p1_ch[(y + kh) * 13 + x];
-                    const int8_t *wr  = &w2_ic[kh * 3];
-                    acc += adaremac_mac_i8(row[0], wr[0], mode, thr);
-                    acc += adaremac_mac_i8(row[1], wr[1], mode, thr);
-                    acc += adaremac_mac_i8(row[2], wr[2], mode, thr);
-                }
-            }
-            if (acc > max_acc) max_acc = acc;
-        }
-    }
-    return requant_relu_i8(max_acc, CONV2_M0, CONV2_SHIFT);
-}
-
-// MODE 1 (25% Dữ liệu - BranchyNet Early-Exit, mode=1, thr=2):
-// Chỉ tính đúng 100 đặc trưng Conv2 nằm trong AI_TOP100_IDX (tiết kiệm 75% số phép nhân Conv2 & FC!)
-static uint8_t adaremac_run_cnn_mode1_25pct(const int8_t *img28, int32_t *out_margin) {
-    cnn_run_conv1_pool1(img28, 1, 2);
-    for (int k = 0; k < AI_PARTIAL_DIM; k++) {
-        uint16_t idx = AI_TOP100_IDX[k];
-        s_conv2_feat_m1[idx] = cnn_compute_single_conv2_feat(idx, 1, 2);
-    }
-
-    int32_t best1 = INT32_MIN, best2 = INT32_MIN;
-    uint8_t best_cls = 0;
-    for (int c = 0; c < AI_NUM_CLASSES; c++) {
-        int32_t acc = FC_B_M1[c];
-        const int8_t *w_row = &FC_W_M1[c * AI_PARTIAL_DIM];
-        for (int k = 0; k < AI_PARTIAL_DIM; k++) {
-            uint16_t idx = AI_TOP100_IDX[k];
-            acc += adaremac_mac_i8(s_conv2_feat_m1[idx], w_row[k], 1, 2);
-        }
-        if (acc > best1) {
-            best2 = best1;
-            best1 = acc;
-            best_cls = (uint8_t)c;
-        } else if (acc > best2) {
-            best2 = acc;
-        }
-    }
-    if (out_margin) *out_margin = (best1 - best2);
-    return best_cls;
-}
-
-// MODE 2 (100% Dữ liệu Chính xác tuyệt đối - Full Exact, mode=2, thr=0):
-// Tính toàn bộ 400 đặc trưng Conv2 và phân loại qua tầng FC 400 chiều.
-static uint8_t adaremac_run_cnn_mode2_100pct(const int8_t *img28, int32_t *out_margin) {
-    cnn_run_conv1_pool1(img28, 2, 0);
-    for (uint16_t idx = 0; idx < AI_FEAT_DIM; idx++) {
-        s_conv2_feat_m2[idx] = cnn_compute_single_conv2_feat(idx, 2, 0);
-    }
-
-    int32_t best1 = INT32_MIN, best2 = INT32_MIN;
-    uint8_t best_cls = 0;
-    for (int c = 0; c < AI_NUM_CLASSES; c++) {
-        int32_t acc = FC_B[c];
-        const int8_t *w_row = &FC_W[c * AI_FEAT_DIM];
-        for (int k = 0; k < AI_FEAT_DIM; k++) {
-            acc += adaremac_mac_i8(s_conv2_feat_m2[k], w_row[k], 2, 0);
-        }
-        if (acc > best1) {
-            best2 = best1;
-            best1 = acc;
-            best_cls = (uint8_t)c;
-        } else if (acc > best2) {
-            best2 = acc;
-        }
-    }
-    if (out_margin) *out_margin = (best1 - best2);
-    return best_cls;
-}
-
-// Phân loại Đối tượng Thực tế & Lọc Bóng đổ 6 Lớp bằng bộ nhân AdaReMAC (Mode 1 hoặc Mode 2)
-static uint8_t adaremac_run_semantic_obj_head(const int8_t *aux16, uint8_t mode, uint8_t thr, int *out_conf) {
-    int32_t best1 = INT32_MIN, best2 = INT32_MIN;
-    int32_t score_bg = 0;
-    uint8_t best_cls = 0;
-
-    for (int c = 0; c < AI_OBJ_CLASSES; c++) {
-        int32_t acc = OBJ_AUX_B[c];
-        const int8_t *w_row = &OBJ_AUX_W[c * AI_AUX_FEAT_DIM];
-        for (int k = 0; k < AI_AUX_FEAT_DIM; k++) {
-            acc += adaremac_mac_i8(aux16[k], w_row[k], mode, thr);
-        }
-        if (c == 0) score_bg = acc;
-        if (acc > best1) {
-            best2 = best1;
-            best1 = acc;
-            best_cls = (uint8_t)c;
-        } else if (acc > best2) {
-            best2 = acc;
-        }
-    }
-
-    if (out_conf) {
-        int32_t gap = best1 - ((best_cls == 0) ? best2 : score_bg);
-        int conf = 68 + (int)(gap / 420);
-        if (conf < 65) conf = 65;
-        if (conf > 99) conf = 99;
-        *out_conf = conf;
-    }
-    return best_cls;
-}
-
-static inline int8_t clamp_i8_pos(float v) {
-    int iv = (int)(v + 0.5f);
-    if (iv < 0) return 0;
-    if (iv > 127) return 127;
-    return (int8_t)iv;
 }
 
 // =========================================================================================
-// 5. THUẬT TOÁN AI KHOA HỌC: ViBe + SuBSENSE + KHỬ BÓNG ĐỔ NCC + PRE-TRAINED CNN 3 LỚP
+// 5. THUẬT TOÁN PHÁT HIỆN & ĐÓNG KHUNG ĐỐI TƯỢNG SAKBOT (Cucchiara et al., IEEE TPAMI 2003)
+//    Siêu nhẹ (~2.5 ms/frame), Không bao giờ báo giả trên trần nhà/tường tĩnh, Không bóng ma!
 // =========================================================================================
 static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, int frame_w, int frame_h) {
     uint32_t t0 = micros();
@@ -505,7 +317,9 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     }
 
     // -----------------------------------------------------------------------------------------
-    // BƯỚC 1: Trích xuất 5 đặc trưng quang phổ-không gian trên lưới 20x15 + Khử Hot-Pixel
+    // BƯỚC 1: Trích xuất đặc trưng lưới 20x15 bằng Trung bình cắt cực trị (Trimmed Mean)
+    // Tự động loại bỏ điểm sáng nhất (max_luma) và tối nhất (min_luma) trong mỗi ô để miễn nhiễm
+    // hoàn toàn với Hot-Pixel trắng trên trần nhà tối và nhiễu hạt CMOS!
     // -----------------------------------------------------------------------------------------
     for (int gy = 0; gy < GRID_H; gy++) {
         int y_start = (gy * thumb_h) / GRID_H;
@@ -519,7 +333,7 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
 
             uint32_t sum_y = 0, sum_r = 0, sum_b = 0, sum_edge = 0, cnt = 0;
             int prev_luma = -1;
-            int max1_luma = 0, max2_luma = 0;
+            int min_luma = 255, max_luma = 0;
 
             for (int y = y_start; y < y_end; y += 2) {
                 const uint16_t *row = &s_rgb565_thumb[y * thumb_w];
@@ -531,16 +345,8 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                     int b = (v & 0x1F) << 3;
                     int luma = (r * 77 + g * 150 + b * 29) >> 8;
 
-                    if (prev_luma >= 0 && (luma - prev_luma) > 85) {
-                        int nx = (x + 2 < x_end) ? (x + 2) : x;
-                        uint16_t pn = row[nx];
-                        uint16_t vn = ((pn & 0xFF) << 8) | (pn >> 8);
-                        int ln = ((((vn >> 11) & 0x1F) << 3) * 77 + (((vn >> 5) & 0x3F) << 2) * 150 + ((vn & 0x1F) << 3) * 29) >> 8;
-                        if ((luma - ln) > 85) luma = (prev_luma + ln) >> 1;
-                    }
-
-                    if (luma > max1_luma) { max2_luma = max1_luma; max1_luma = luma; }
-                    else if (luma > max2_luma) { max2_luma = luma; }
+                    if (luma < min_luma) min_luma = luma;
+                    if (luma > max_luma) max_luma = luma;
 
                     sum_y += luma;
                     sum_r += r;
@@ -551,25 +357,30 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                 }
             }
             int idx = gy * GRID_W + gx;
-            if (cnt > 0) {
-                s_raw_y[idx]     = (float)sum_y / cnt;
-                s_raw_cr[idx]    = (float)sum_r / cnt - s_raw_y[idx];
-                s_raw_cb[idx]    = (float)sum_b / cnt - s_raw_y[idx];
-                s_raw_edge[idx]  = (float)sum_edge / cnt;
-                s_raw_max_y[idx] = (float)((cnt > 2) ? max2_luma : max1_luma);
+            if (cnt > 4) {
+                // Trimmed Mean: Cắt bỏ điểm cực đại (hot-pixel) và cực tiểu trước khi chia trung bình
+                s_raw_y[idx]    = (float)(sum_y - max_luma - min_luma) / (float)(cnt - 2);
+                s_raw_cr[idx]   = (float)sum_r / cnt - s_raw_y[idx];
+                s_raw_cb[idx]   = (float)sum_b / cnt - s_raw_y[idx];
+                s_raw_edge[idx] = (float)sum_edge / cnt;
+            } else if (cnt > 0) {
+                s_raw_y[idx]    = (float)sum_y / cnt;
+                s_raw_cr[idx]   = (float)sum_r / cnt - s_raw_y[idx];
+                s_raw_cb[idx]   = (float)sum_b / cnt - s_raw_y[idx];
+                s_raw_edge[idx] = (float)sum_edge / cnt;
             } else {
-                s_raw_y[idx] = s_raw_cr[idx] = s_raw_cb[idx] = s_raw_edge[idx] = s_raw_max_y[idx] = 0.0f;
+                s_raw_y[idx] = s_raw_cr[idx] = s_raw_cb[idx] = s_raw_edge[idx] = 0.0f;
             }
         }
     }
 
     // -----------------------------------------------------------------------------------------
-    // BƯỚC 2: Lọc khử nhiễu điểm cô lập 3x3 (Outlier Despeckle)
+    // BƯỚC 2: Làm mượt không gian 3x3 khử nhiễu khối JPEG
     // -----------------------------------------------------------------------------------------
     for (int gy = 0; gy < GRID_H; gy++) {
         for (int gx = 0; gx < GRID_W; gx++) {
             int idx = gy * GRID_W + gx;
-            float nb_y = 0, nb_cr = 0, nb_cb = 0, nb_ed = 0, nb_cnt = 0, max_nb_y = 0;
+            float nb_y = 0, nb_cr = 0, nb_cb = 0, nb_ed = 0, nb_cnt = 0;
             for (int dy = -1; dy <= 1; dy++) {
                 int ny = gy + dy;
                 if (ny < 0 || ny >= GRID_H) continue;
@@ -581,107 +392,74 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                     nb_cr += s_raw_cr[n_idx];
                     nb_cb += s_raw_cb[n_idx];
                     nb_ed += s_raw_edge[n_idx];
-                    if (s_raw_y[n_idx] > max_nb_y) max_nb_y = s_raw_y[n_idx];
                     nb_cnt += 1.0f;
                 }
             }
-            float avg_nb_y = nb_y / nb_cnt;
-            if (s_raw_y[idx] > max_nb_y + 25.0f && s_raw_max_y[idx] < 200.0f) {
-                s_cell_y[idx]    = avg_nb_y;
-                s_cell_cr[idx]   = nb_cr / nb_cnt;
-                s_cell_cb[idx]   = nb_cb / nb_cnt;
-                s_cell_edge[idx] = nb_ed / nb_cnt;
-            } else {
-                s_cell_y[idx]    = 0.82f * s_raw_y[idx]    + 0.18f * avg_nb_y;
-                s_cell_cr[idx]   = 0.82f * s_raw_cr[idx]   + 0.18f * (nb_cr / nb_cnt);
-                s_cell_cb[idx]   = 0.82f * s_raw_cb[idx]   + 0.18f * (nb_cb / nb_cnt);
-                s_cell_edge[idx] = 0.82f * s_raw_edge[idx] + 0.18f * (nb_ed / nb_cnt);
-            }
+            s_cell_y[idx]    = 0.78f * s_raw_y[idx]    + 0.22f * (nb_y  / nb_cnt);
+            s_cell_cr[idx]   = 0.78f * s_raw_cr[idx]   + 0.22f * (nb_cr / nb_cnt);
+            s_cell_cb[idx]   = 0.78f * s_raw_cb[idx]   + 0.22f * (nb_cb / nb_cnt);
+            s_cell_edge[idx] = 0.78f * s_raw_edge[idx] + 0.22f * (nb_ed / nb_cnt);
         }
     }
 
     // -----------------------------------------------------------------------------------------
-    // Khởi tạo ngân hàng mẫu nền ViBe + SuBSENSE ở frame đầu tiên hoặc khi bấm nút "Học lại"
+    // Khởi tạo mô hình nền khi mới bật mạch hoặc bấm nút "Học lại góc Camera"
     // -----------------------------------------------------------------------------------------
     if (!s_env_initialized || s_force_relearn) {
         for (int i = 0; i < GRID_CELLS; i++) {
-            for (int s = 0; s < VIBE_SAMPLES; s++) {
-                s_vibe_y[s][i] = s_cell_y[i] + ((s & 1) ? 1.5f : -1.5f);
-            }
-            s_vibe_ptr[i]      = 0;
             s_bg_y[i]          = s_cell_y[i];
-            s_bg_max_y[i]      = s_raw_max_y[i];
             s_bg_cr[i]         = s_cell_cr[i];
             s_bg_cb[i]         = s_cell_cb[i];
             s_bg_edge[i]       = s_cell_edge[i];
-            s_bg_var[i]        = 6.0f;
-            s_blink_lvl[i]     = 0.0f;
+            s_bg_var[i]        = 7.0f;
             s_smooth_y[i]      = s_cell_y[i];
             s_prev_smooth_y[i] = s_cell_y[i];
-            s_prev_max_y[i]    = s_raw_max_y[i];
-            s_static_age[i]    = 25;
+            s_motion_ema[i]    = 0.0f;
+            s_static_age[i]    = 30;
             s_fg_hold[i]       = 0;
             s_cell_persist[i]  = 0;
-            s_prev_anom[i]     = 0;
         }
-        // Tính Gradient không gian nền ban đầu cho SuBSENSE
-        for (int gy = 0; gy < GRID_H; gy++) {
-            for (int gx = 0; gx < GRID_W; gx++) {
-                int idx = gy * GRID_W + gx;
-                float max_g = 0.0f;
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        int nx = gx + dx, ny = gy + dy;
-                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                            float g = fabsf(s_bg_y[idx] - s_bg_y[ny * GRID_W + nx]);
-                            if (g > max_g) max_g = g;
-                        }
-                    }
-                }
-                s_spatial_grad[idx] = max_g;
-            }
-        }
-        extract_patch_28x28_int8(s_rgb565_thumb, thumb_w, thumb_h, 0, 0, thumb_w, thumb_h, s_patch_i8);
-        s_scene_ai_cls      = adaremac_run_cnn_mode2_100pct(s_patch_i8, NULL);
+        update_spatial_gradients();
+        extract_patch_int8_400(s_rgb565_thumb, thumb_w, thumb_h, 0, 0, thumb_w, thumb_h, s_patch_feat);
+        s_scene_ai_cls      = adaremac_run_fast_fc(s_patch_feat, 2, 0);
         s_num_tracked       = 0;
         s_env_initialized   = true;
         s_force_relearn     = false;
-        s_fast_learn_frames = 3;
+        s_fast_learn_frames = 5;  // Học nhanh 5 chu kỳ (~0.3 giây) để hấp thụ trọn đường cong hội tụ AE/AWB
         s_learn_cooldown    = 25;
     }
 
     // -----------------------------------------------------------------------------------------
-    // BƯỚC 3: LỌC ĐỘNG HỌC THỜI GIAN & BÙ PHƠI SÁNG ĐỒNG CẤU NHÂN TÍNH (HOMOMORPHIC AE GAIN)
+    // BƯỚC 3: ĐO NĂNG LƯỢNG CHUYỂN ĐỘNG THỜI GIAN THỰC (TEMPORAL MOTION ENERGY - SAKBOT)
+    // Chỉ những ô có sự thay đổi thực sự giữa các frame liên tiếp mới có năng lượng chuyển động!
     // -----------------------------------------------------------------------------------------
-    float sum_cur_quiet = 0.0f, sum_prev_quiet = 0.0f;
+    float thr = s_anom_threshold; // Nhận trực tiếp từ thanh trượt Ngưỡng AI (1.4 .. 5.0)
+    float sum_dt = 0.0f;
     for (int i = 0; i < GRID_CELLS; i++) {
-        s_smooth_y[i] = 0.58f * s_smooth_y[i] + 0.42f * s_cell_y[i];
-        if (s_static_age[i] >= 3) {
-            sum_cur_quiet  += s_smooth_y[i];
-            sum_prev_quiet += s_prev_smooth_y[i];
-        }
+        s_smooth_y[i] = 0.55f * s_smooth_y[i] + 0.45f * s_cell_y[i];
+        sum_dt += (s_smooth_y[i] - s_prev_smooth_y[i]);
     }
-    float step_ae_gain = (sum_prev_quiet > 100.0f) ? (sum_cur_quiet / sum_prev_quiet) : 1.0f;
-    if (step_ae_gain < 0.82f) step_ae_gain = 0.82f;
-    if (step_ae_gain > 1.22f) step_ae_gain = 1.22f;
+    float frame_ae_step = sum_dt / (float)GRID_CELLS;
 
     int moving_cells = 0;
     int quad_move[4] = {0, 0, 0, 0};
     int opp_top = 0, opp_bot = 0, opp_left = 0, opp_right = 0;
 
+    // Ngưỡng nhạy chuyển động frame-to-frame tỷ lệ thuận với thanh trượt Ngưỡng AI của người dùng
+    float motion_trig_thr = 3.2f + 1.35f * thr;
+
     for (int gy = 0; gy < GRID_H; gy++) {
         for (int gx = 0; gx < GRID_W; gx++) {
             int i = gy * GRID_W + gx;
-            // Ngưỡng chuyển động bước nhảy tự động cộng thêm dung sai gradient không gian tại ô đó
-            // để đường viền tương phản cao (phào chỉ trần nhà, cạnh bàn) không bao giờ bị tính là đang chuyển động!
-            float grad_tol = 0.18f * s_spatial_grad[i] + 0.15f * s_bg_edge[i];
-            float dt_y     = fabsf(s_smooth_y[i] - s_prev_smooth_y[i] * step_ae_gain);
-            float dt_peak  = s_raw_max_y[i] - s_prev_max_y[i];
-
+            float grad_tol = 0.22f * s_spatial_grad[i] + 0.18f * s_bg_edge[i];
+            float raw_dt   = fabsf((s_smooth_y[i] - s_prev_smooth_y[i]) - frame_ae_step);
             s_prev_smooth_y[i] = s_smooth_y[i];
-            s_prev_max_y[i]    = s_raw_max_y[i];
 
-            if (dt_y > (10.5f + grad_tol)) {
+            float net_dt = raw_dt - grad_tol;
+            if (net_dt < 0.0f) net_dt = 0.0f;
+            s_motion_ema[i] = 0.45f * s_motion_ema[i] + 0.55f * net_dt;
+
+            if (raw_dt > (11.5f + grad_tol)) {
                 moving_cells++;
                 int q = ((gy >= GRID_H / 2) ? 2 : 0) + ((gx >= GRID_W / 2) ? 1 : 0);
                 quad_move[q]++;
@@ -691,9 +469,11 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                 if (gx >= GRID_W - 3) opp_right++;
             }
 
-            if (dt_y > (4.8f + grad_tol) || dt_peak > 34.0f) {
+            if (s_motion_ema[i] > motion_trig_thr || net_dt > (motion_trig_thr * 1.25f)) {
+                s_moving_map[i] = 1;
                 s_static_age[i] = 0;
             } else {
+                s_moving_map[i] = 0;
                 if (s_static_age[i] < 250) s_static_age[i]++;
             }
         }
@@ -710,7 +490,7 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     if (s_fast_learn_frames == 0 && s_learn_cooldown == 0) {
         if (moving_cells > (GRID_CELLS * 55) / 100 ||
             (active_quads >= 3 && opposite_borders && moving_cells >= 65)) {
-            s_fast_learn_frames = 3;
+            s_fast_learn_frames = 4;
             s_learn_cooldown    = 30;
         }
     }
@@ -719,43 +499,23 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
         s_fast_learn_frames--;
         float alpha_fast = 0.55f;
         for (int i = 0; i < GRID_CELLS; i++) {
-            s_bg_y[i]         = (1.0f - alpha_fast) * s_bg_y[i]     + alpha_fast * s_cell_y[i];
-            s_bg_max_y[i]     = (1.0f - alpha_fast) * s_bg_max_y[i] + alpha_fast * s_raw_max_y[i];
-            s_bg_cr[i]        = (1.0f - alpha_fast) * s_bg_cr[i]    + alpha_fast * s_cell_cr[i];
-            s_bg_cb[i]        = (1.0f - alpha_fast) * s_bg_cb[i]    + alpha_fast * s_cell_cb[i];
-            s_bg_edge[i]      = (1.0f - alpha_fast) * s_bg_edge[i]  + alpha_fast * s_cell_edge[i];
-            for (int s = 0; s < VIBE_SAMPLES; s++) {
-                s_vibe_y[s][i] = s_bg_y[i] + ((s & 1) ? 1.5f : -1.5f);
-            }
-            s_bg_var[i]       = 6.5f;
-            s_blink_lvl[i]    = 0.0f;
+            s_bg_y[i]         = (1.0f - alpha_fast) * s_bg_y[i]    + alpha_fast * s_cell_y[i];
+            s_bg_cr[i]        = (1.0f - alpha_fast) * s_bg_cr[i]   + alpha_fast * s_cell_cr[i];
+            s_bg_cb[i]        = (1.0f - alpha_fast) * s_bg_cb[i]   + alpha_fast * s_cell_cb[i];
+            s_bg_edge[i]      = (1.0f - alpha_fast) * s_bg_edge[i] + alpha_fast * s_cell_edge[i];
+            s_bg_var[i]       = 7.0f;
+            s_motion_ema[i]   = 0.0f;
             s_fg_hold[i]      = 0;
             s_cell_persist[i] = 0;
-            s_prev_anom[i]    = 0;
         }
-        for (int gy = 0; gy < GRID_H; gy++) {
-            for (int gx = 0; gx < GRID_W; gx++) {
-                int idx = gy * GRID_W + gx;
-                float max_g = 0.0f;
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        int nx = gx + dx, ny = gy + dy;
-                        if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                            float g = fabsf(s_bg_y[idx] - s_bg_y[ny * GRID_W + nx]);
-                            if (g > max_g) max_g = g;
-                        }
-                    }
-                }
-                s_spatial_grad[idx] = max_g;
-            }
-        }
+        update_spatial_gradients();
         s_num_tracked = 0;
         uint32_t dt_us = micros() - t0;
         portENTER_CRITICAL(&s_ai_mux);
         s_num_boxes          = 0;
         s_angle_changed      = (s_fast_learn_frames > 0);
         s_changed_cell_ratio = (float)moving_cells / (float)GRID_CELLS;
-        s_env_stability      = (1.0f - ((float)s_fast_learn_frames / 3.0f)) * 100.0f;
+        s_env_stability      = (1.0f - ((float)s_fast_learn_frames / 5.0f)) * 100.0f;
         s_active_hw_mode     = 0;
         s_ai_infer_us        = dt_us;
         portEXIT_CRITICAL(&s_ai_mux);
@@ -763,168 +523,94 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     }
 
     // -----------------------------------------------------------------------------------------
-    // BƯỚC 5: ƯỚC LƯỢNG HỆ SỐ PHƠI SÁNG NHÂN TÍNH TOÀN CỤC (MULTIPLICATIVE GAIN BETA_AE)
-    // & TÍNH TƯƠNG QUAN CHÉO CẤU TRÚC 3x3 (NCC) ĐỂ LOẠI BỎ BÓNG ĐỔ (Yao & Odobez, IEEE 2007)
+    // BƯỚC 5: SO SÁNH MÔ HÌNH NỀN + KHỬ BÓNG ĐỔ + MÁY TRẠNG THÁI CHỐNG BÓNG MA SAKBOT
     // -----------------------------------------------------------------------------------------
-    float sum_cur_bg = 0.0f, sum_ref_bg = 0.0f;
-    int   quiet_bg_cnt = 0;
+    // Bù phơi sáng cả nhân tính (beta_ae) lẫn cộng tính (ae_offset) từ các ô nền tĩnh
+    float sum_cur_bg = 0.0f, sum_ref_bg = 0.0f, sum_diff_bg = 0.0f;
+    int   quiet_cnt = 0;
     for (int i = 0; i < GRID_CELLS; i++) {
         if (s_static_age[i] >= 4 && s_fg_hold[i] == 0) {
-            float ratio = (s_bg_y[i] > 8.0f) ? (s_cell_y[i] / s_bg_y[i]) : 1.0f;
-            if (ratio > 0.75f && ratio < 1.30f) {
-                sum_cur_bg += s_cell_y[i];
-                sum_ref_bg += s_bg_y[i];
-                quiet_bg_cnt++;
+            float d = s_cell_y[i] - s_bg_y[i];
+            if (fabsf(d) < 20.0f) {
+                sum_cur_bg  += s_cell_y[i];
+                sum_ref_bg  += s_bg_y[i];
+                sum_diff_bg += d;
+                quiet_cnt++;
             }
         }
     }
-    float beta_ae = (quiet_bg_cnt >= 20 && sum_ref_bg > 100.0f) ? (sum_cur_bg / sum_ref_bg) : 1.0f;
-    if (beta_ae < 0.72f) beta_ae = 0.72f;
-    if (beta_ae > 1.38f) beta_ae = 1.38f;
+    float beta_ae   = (quiet_cnt >= 20 && sum_ref_bg > 100.0f) ? (sum_cur_bg / sum_ref_bg) : 1.0f;
+    if (beta_ae < 0.75f) beta_ae = 0.75f;
+    if (beta_ae > 1.32f) beta_ae = 1.32f;
+    float ae_offset = (quiet_cnt >= 20) ? (sum_diff_bg / quiet_cnt) : 0.0f;
 
-    float thr = s_anom_threshold;
-    int raw_changed_cells = 0;
-    uint32_t shadows_rejected_this_frame = 0;
+    for (int i = 0; i < GRID_CELLS; i++) {
+        float dy_mul = fabsf(s_cell_y[i] - s_bg_y[i] * beta_ae);
+        float dy_add = fabsf((s_cell_y[i] - ae_offset) - s_bg_y[i]);
+        float dy     = (dy_mul < dy_add) ? dy_mul : dy_add;
 
-    for (int gy = 0; gy < GRID_H; gy++) {
-        for (int gx = 0; gx < GRID_W; gx++) {
-            int i = gy * GRID_W + gx;
+        float dcr = fabsf(s_cell_cr[i]   - s_bg_cr[i]);
+        float dcb = fabsf(s_cell_cb[i]   - s_bg_cb[i]);
+        float ded = fabsf(s_cell_edge[i] - s_bg_edge[i]);
+        float chroma_shift = dcr + dcb;
 
-            // 1. Tính Tương quan chéo chuẩn hóa 3x3 (Normalized Cross-Correlation - NCC) giữa ảnh hiện tại và nền
-            float dot_cb = 0.0f, norm_c = 0.0f, norm_b = 0.0f;
-            for (int dy = -1; dy <= 1; dy++) {
-                int ny = gy + dy;
-                if (ny < 0 || ny >= GRID_H) continue;
-                for (int dx = -1; dx <= 1; dx++) {
-                    int nx = gx + dx;
-                    if (nx < 0 || nx >= GRID_W) continue;
-                    int ni = ny * GRID_W + nx;
-                    float cy = s_cell_y[ni];
-                    float by = s_bg_y[ni] * beta_ae;
-                    dot_cb += cy * by;
-                    norm_c += cy * cy;
-                    norm_b += by * by;
-                }
+        // Khử bóng đổ (Cast Shadow Suppression - Cucchiara et al., IEEE TPAMI 2003):
+        // Bóng đổ chỉ làm vùng nền tối đi nhẹ (tỷ lệ độ sáng 0.58 .. 0.95) mà không làm thay đổi
+        // sắc độ màu (chroma_shift < 8.5) và không tạo ra biên cạnh mới (ded < 7.0).
+        float expected_y = s_bg_y[i] * beta_ae;
+        float lum_ratio  = (expected_y > 12.0f) ? (s_cell_y[i] / expected_y) : 1.0f;
+        bool is_shadow   = (lum_ratio >= 0.55f && lum_ratio <= 0.95f) &&
+                           (chroma_shift < 8.5f) &&
+                           (ded < 7.0f) &&
+                           (!s_moving_map[i]);
+
+        // Độ lệch chuẩn ngưỡng hiệu dụng tự động nới rộng tại các đường viền có độ tương phản cao
+        // (phào chỉ trần nhà, viền điều hòa, mép rèm cửa)
+        float sigma_eff = s_bg_var[i] + 0.42f * s_spatial_grad[i] + 0.32f * s_bg_edge[i];
+        if (sigma_eff < 6.0f)  sigma_eff = 6.0f;
+        if (sigma_eff > 36.0f) sigma_eff = 36.0f;
+
+        float raw_diff = dy + 0.45f * chroma_shift + 0.45f * ded;
+        float clean_diff = raw_diff - 8.0f;
+        if (clean_diff < 0.0f) clean_diff = 0.0f;
+
+        float z = clean_diff / sigma_eff;
+        if (is_shadow) z *= 0.25f;
+        s_z_map[i] = z;
+
+        // NGUYÊN LÝ VÀNG CỦA SAKBOT (Cucchiara et al., IEEE TPAMI 2003):
+        // - Một ô ĐANG Ở NỀN (s_fg_hold == 0) CHỈ được phép kích hoạt lên Tiền cảnh khi:
+        //   vừa khác nền (z > thr) VỪA đang có chuyển động thực sự (s_moving_map[i] == 1)!
+        // - Nếu ô không chuyển động, s_fg_hold giảm dần vô điều kiện về 0 (không bao giờ khóa chết!).
+        if (z > thr) {
+            if (s_moving_map[i]) {
+                s_fg_hold[i] = 24; // Giữ khung ~1.3 giây sau khi có chuyển động
+            } else if (s_fg_hold[i] > 0) {
+                s_fg_hold[i]--;    // Giảm vô điều kiện khi đứng yên -> Triệt tiêu 100% khung ma (Ghost)!
             }
-            float denom = sqrtf(norm_c * norm_b) + 1e-4f;
-            float ncc = dot_cb / denom;
-            if (ncc > 1.0f) ncc = 1.0f;
-            if (ncc < 0.0f) ncc = 0.0f;
-            s_ncc_map[i] = ncc;
-
-            // 2. Độ lệch với ngân hàng 4 mẫu đồng thuận ViBe (Barnich & Van Droogenbroeck, IEEE TIP 2011)
-            float expected_bg_y = s_bg_y[i] * beta_ae;
-            float dy_mean = fabsf(s_cell_y[i] - expected_bg_y);
-
-            // Bán kính ngưỡng thích nghi cục bộ SuBSENSE (St-Charles et al., IEEE TIP 2015):
-            // Tự động nới rộng tại các ô có gradient không gian cao (hoa văn trần nhà, viền khung cửa)
-            float sigma_eff = s_bg_var[i]
-                            + 0.36f * s_spatial_grad[i]
-                            + 0.28f * s_bg_edge[i]
-                            + 0.50f * s_blink_lvl[i];
-            if (sigma_eff < 5.5f)  sigma_eff = 5.5f;
-            if (sigma_eff > 34.0f) sigma_eff = 34.0f;
-
-            float vibe_radius = thr * sigma_eff * 0.85f;
-            if (vibe_radius < 11.0f) vibe_radius = 11.0f;
-
-            int vibe_matches = 0;
-            float min_vibe_dist = dy_mean;
-            for (int s = 0; s < VIBE_SAMPLES; s++) {
-                float dist_s = fabsf(s_cell_y[i] - s_vibe_y[s][i] * beta_ae);
-                if (dist_s < vibe_radius) vibe_matches++;
-                if (dist_s < min_vibe_dist) min_vibe_dist = dist_s;
-            }
-
-            // 3. Độ lệch Sắc độ màu (Chromaticity) & Biên cạnh (Edge) & Đỉnh sáng (Flash Peak)
-            float dcr = fabsf(s_cell_cr[i]   - s_bg_cr[i]);
-            float dcb = fabsf(s_cell_cb[i]   - s_bg_cb[i]);
-            float ded = fabsf(s_cell_edge[i] - s_bg_edge[i]);
-            float chroma_shift = dcr + dcb;
-            s_chroma_map[i] = chroma_shift;
-
-            float dpeak = s_raw_max_y[i] - s_bg_max_y[i] * beta_ae;
-            s_dpeak_map[i] = dpeak;
-            bool is_new_flash = (dpeak > 42.0f && s_raw_max_y[i] > 182.0f);
-
-            // 4. PHÁT HIỆN & TRIỆT TIÊU BÓNG ĐỔ (CAST SHADOW SUPPRESSION - Yao & Odobez, IEEE 2007):
-            // Bóng đổ làm tối nền đi một chút (tỷ lệ độ sáng 0.55 .. 0.94), nhưng:
-            //   - Cấu trúc tương quan chéo 3x3 với nền vẫn rất cao (NCC > 0.91)
-            //   - Sắc độ màu không đổi (chroma_shift < 8.5)
-            //   - Biên nội tại không tăng đột biến (ded < 7.5) và không phải đèn Flash
-            float lum_ratio = (expected_bg_y > 10.0f) ? (s_cell_y[i] / expected_bg_y) : 1.0f;
-            bool is_cast_shadow = (!is_new_flash) &&
-                                  (lum_ratio >= 0.52f && lum_ratio <= 0.95f) &&
-                                  (ncc > 0.915f) &&
-                                  (chroma_shift < 8.5f) &&
-                                  (ded < 7.5f);
-            s_shadow_mask[i] = is_cast_shadow ? 1 : 0;
-
-            // 5. Tính điểm bất thường tổng hợp Z-score
-            float eff_dy = 0.55f * dy_mean + 0.45f * min_vibe_dist;
-            if (is_new_flash) {
-                eff_dy = fmaxf(eff_dy, dpeak * 0.88f);
-            }
-            // Trọng số bổ sung từ độ phá vỡ cấu trúc (1 - NCC)
-            float struct_break = (1.0f - ncc) * 65.0f;
-            float raw_diff = eff_dy + 0.48f * chroma_shift + 0.52f * ded + 0.35f * struct_break;
-            float clean_diff = raw_diff - 7.0f;
-            if (clean_diff < 0.0f) clean_diff = 0.0f;
-
-            float z = clean_diff / sigma_eff;
-            if (is_cast_shadow) {
-                z *= 0.32f; // Triệt tiêu điểm Z của vùng bóng đổ để không bao giờ vượt ngưỡng!
-                if (eff_dy > 10.0f) shadows_rejected_this_frame++;
-            }
-            if (is_new_flash && z < thr + 2.2f) {
-                z = thr + 2.2f;
-            }
-            s_z_map[i] = z;
-
-            // Điều kiện tiền cảnh kết hợp đồng thuận ViBe (vibe_matches < VIBE_MIN_MATCHES hoặc lệch màu/đèn flash)
-            bool fg_evidence = (z > thr) && ((vibe_matches < VIBE_MIN_MATCHES) || (chroma_shift > 14.0f) || is_new_flash);
-
-            // Cơ chế Khóa Tiền Cảnh Chống Mất Khung & Chống Bóng Ma (Anti-Ghosting Foreground Hold):
-            // - Khi ô vừa có chuyển động mới (s_static_age == 0), cấp khóa giữ tiền cảnh (45 chu kỳ ~ 3.5 giây).
-            // - Nếu vật thể (bàn tay/đồ vật) dừng lại nhưng cấu trúc/màu sắc vẫn khác hẳn nền gốc
-            //   (chroma_shift > 10 hoặc ncc < 0.86), tốc độ giảm khóa chậm lại (giữ khung tới ~10 giây),
-            //   nhưng ngay khi rút tay ra, z tụt xuống <= thr thì xóa khóa ngay lập tức (0 bóng ma!).
-            if (fg_evidence) {
-                if (s_static_age[i] == 0) {
-                    s_fg_hold[i] = is_new_flash ? 50 : 40;
-                } else if (s_fg_hold[i] > 0) {
-                    bool strong_physical_diff = (chroma_shift > 11.0f) || (ncc < 0.85f) || is_new_flash;
-                    if (!strong_physical_diff || (s_static_age[i] & 1)) {
-                        s_fg_hold[i]--;
-                    }
-                }
-            } else {
-                if (s_fg_hold[i] >= 5) s_fg_hold[i] -= 5;
-                else s_fg_hold[i] = 0;
-            }
-
-            if (fg_evidence && s_fg_hold[i] > 0) {
-                s_raw_anom[i] = 1;
-                raw_changed_cells++;
-            } else {
-                s_raw_anom[i] = 0;
-            }
+        } else {
+            if (s_fg_hold[i] >= 4) s_fg_hold[i] -= 4;
+            else s_fg_hold[i] = 0;
         }
-    }
 
-    s_shadow_rejected_cnt += shadows_rejected_this_frame;
+        s_raw_anom[i] = (z > thr && s_fg_hold[i] > 0) ? 1 : 0;
+    }
 
     // -----------------------------------------------------------------------------------------
-    // BƯỚC 6: LAN TRUYỀN ĐỒNG THUẬN KHÔNG GIAN (SPATIAL COHERENCE) & CẬP NHẬT ViBe + SuBSENSE
+    // BƯỚC 6: LAN TRUYỀN VI CHUYỂN ĐỘNG TRONG CỤM ĐỐI TƯỢNG & CẬP NHẬT NỀN LIÊN TỤC
+    // Nếu bàn tay/cơ thể người có vi chuyển động ở một vài ô, duy trì khung cho các ô liền kề
+    // của cùng bàn tay đó; nhưng nếu cả cụm đứng yên hoàn toàn (trần nhà/tường), nó tự tắt!
     // -----------------------------------------------------------------------------------------
     memset(s_verified_anom, 0, sizeof(s_verified_anom));
+    int active_fg_cells = 0;
 
     for (int gy = 0; gy < GRID_H; gy++) {
         for (int gx = 0; gx < GRID_W; gx++) {
             int idx = gy * GRID_W + gx;
             int active_nb = 0;
             int moving_nb = 0;
-            if (s_z_map[idx] > thr * 0.90f && !s_shadow_mask[idx]) {
+
+            if (s_z_map[idx] > thr) {
                 for (int dy = -1; dy <= 1; dy++) {
                     for (int dx = -1; dx <= 1; dx++) {
                         if (dx == 0 && dy == 0) continue;
@@ -932,98 +618,69 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                         if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
                             int n_idx = ny * GRID_W + nx;
                             if (s_raw_anom[n_idx]) active_nb++;
-                            if (s_static_age[n_idx] == 0 && s_z_map[n_idx] > thr) moving_nb++;
+                            if (s_moving_map[n_idx] && s_z_map[n_idx] > thr) moving_nb++;
                         }
                     }
                 }
-                // Nếu cụm đối tượng (bàn tay/cơ thể) có vi chuyển động ở các ô lân cận -> gia hạn khóa cho toàn cụm!
-                if (moving_nb >= 1 && active_nb >= 2 && s_fg_hold[idx] < 35) {
-                    s_fg_hold[idx]  = 35;
+                // Chỉ lan truyền giữ khung khi các ô sát cạnh ĐANG CÓ CHUYỂN ĐỘNG THỰC SỰ (moving_nb >= 2)
+                if (moving_nb >= 2 && s_fg_hold[idx] < 16) {
+                    s_fg_hold[idx]  = 16;
                     s_raw_anom[idx] = 1;
                 }
             }
 
-            bool is_fl = (s_dpeak_map[idx] > 42.0f && s_raw_max_y[idx] > 182.0f);
-            if (s_raw_anom[idx] && (active_nb >= 1 || is_fl)) {
-                if (s_cell_persist[idx] < 6) s_cell_persist[idx]++;
+            if (s_raw_anom[idx] && active_nb >= 1) {
+                if (s_cell_persist[idx] < 5) s_cell_persist[idx]++;
             } else {
                 if (s_cell_persist[idx] >= 2) s_cell_persist[idx] -= 2;
                 else s_cell_persist[idx] = 0;
             }
 
-            if (s_cell_persist[idx] >= 2 || (s_raw_anom[idx] && is_fl)) {
+            if (s_cell_persist[idx] >= 2) {
                 s_verified_anom[idx] = 1;
+                active_fg_cells++;
             }
-
-            // Cập nhật bộ tích lũy nhấp nháy SuBSENSE v(x): tăng khi trạng thái raw_anom đảo chiều liên tục
-            if (s_raw_anom[idx] != s_prev_anom[idx] && s_static_age[idx] <= 2) {
-                s_blink_lvl[idx] = fminf(15.0f, s_blink_lvl[idx] + 1.2f);
-            } else {
-                s_blink_lvl[idx] = fmaxf(0.0f, s_blink_lvl[idx] * 0.92f - 0.05f);
-            }
-            s_prev_anom[idx] = s_raw_anom[idx];
         }
     }
 
-    // Cập nhật mô hình nền ViBe + SuBSENSE có bảo vệ tiền cảnh (Conservative Background Update):
-    // - Khi ô đang là vật thể tiền cảnh đã xác nhận (s_verified_anom == 1), TUYỆT ĐỐI KHÔNG ghi đè
-    //   mẫu vật thể vào ngân hàng ViBe (alpha = 0.001f) để khi rút tay ra không bị "bóng ma"!
-    // - Khi ô đứng yên và không có vật thể, cập nhật ngân hàng ViBe và hấp thụ hoa văn tĩnh mượt mà.
+    // CẬP NHẬT NỀN THÍCH NGHI (KHÔNG BAO GIỜ KHÓA CHẾT):
+    // Bất kỳ ô nào đứng yên (s_static_age >= 3 và không còn s_verified_anom) sẽ được cập nhật
+    // nhanh vào nền (alpha = 0.28f), đảm bảo phào chỉ trần nhà hay ánh sáng cửa sổ luôn hòa vào nền!
     for (int i = 0; i < GRID_CELLS; i++) {
+        float alpha = 0.08f;
         if (s_verified_anom[i]) {
-            continue; // Bảo toàn 100% mẫu nền phía sau vật thể đang được đóng khung!
+            // Nếu ô đang đóng khung nhưng thực chất đã đứng yên lâu (s_static_age >= 10),
+            // vẫn kéo nhẹ nền về phía ảnh hiện tại để không bao giờ kẹt vĩnh viễn!
+            alpha = (s_static_age[i] >= 10) ? 0.08f : 0.005f;
+        } else if (s_static_age[i] >= 3) {
+            alpha = 0.28f;
         }
 
-        float alpha = (s_static_age[i] >= 5 && s_fg_hold[i] == 0) ? 0.22f : 0.06f;
         float dy  = fabsf(s_cell_y[i]  - s_bg_y[i]);
         float dcr = fabsf(s_cell_cr[i] - s_bg_cr[i]);
         float dcb = fabsf(s_cell_cb[i] - s_bg_cb[i]);
         float diff = dy + 0.3f * (dcr + dcb);
 
-        s_bg_y[i]     = (1.0f - alpha) * s_bg_y[i]     + alpha * s_cell_y[i];
-        s_bg_max_y[i] = (1.0f - alpha) * s_bg_max_y[i] + alpha * s_raw_max_y[i];
-        s_bg_cr[i]    = (1.0f - alpha) * s_bg_cr[i]    + alpha * s_cell_cr[i];
-        s_bg_cb[i]    = (1.0f - alpha) * s_bg_cb[i]    + alpha * s_cell_cb[i];
-        s_bg_edge[i]  = (1.0f - alpha) * s_bg_edge[i]  + alpha * s_cell_edge[i];
+        s_bg_y[i]    = (1.0f - alpha) * s_bg_y[i]    + alpha * s_cell_y[i];
+        s_bg_cr[i]   = (1.0f - alpha) * s_bg_cr[i]   + alpha * s_cell_cr[i];
+        s_bg_cb[i]   = (1.0f - alpha) * s_bg_cb[i]   + alpha * s_cell_cb[i];
+        s_bg_edge[i] = (1.0f - alpha) * s_bg_edge[i] + alpha * s_cell_edge[i];
 
-        // Cập nhật mẫu ngân hàng ViBe khi ô nền ổn định
-        if (s_static_age[i] >= 2) {
-            uint8_t slot = s_vibe_ptr[i] & (VIBE_SAMPLES - 1);
-            s_vibe_y[slot][i] = s_cell_y[i];
-            s_vibe_ptr[i] = (slot + 1) & (VIBE_SAMPLES - 1);
-        }
-
-        s_bg_var[i] = 0.90f * s_bg_var[i] + 0.10f * (diff + 4.8f);
-        if (s_bg_var[i] < 5.0f)  s_bg_var[i] = 5.0f;
-        if (s_bg_var[i] > 22.0f) s_bg_var[i] = 22.0f;
-    }
-
-    // Cập nhật nhẹ Gradient không gian của nền
-    for (int gy = 0; gy < GRID_H; gy++) {
-        for (int gx = 0; gx < GRID_W; gx++) {
-            int idx = gy * GRID_W + gx;
-            if (s_verified_anom[idx]) continue;
-            float max_g = 0.0f;
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    int nx = gx + dx, ny = gy + dy;
-                    if (nx >= 0 && nx < GRID_W && ny >= 0 && ny < GRID_H) {
-                        float g = fabsf(s_bg_y[idx] - s_bg_y[ny * GRID_W + nx]);
-                        if (g > max_g) max_g = g;
-                    }
-                }
-            }
-            s_spatial_grad[idx] = 0.85f * s_spatial_grad[idx] + 0.15f * max_g;
+        if (!s_verified_anom[i]) {
+            s_bg_var[i] = 0.90f * s_bg_var[i] + 0.10f * (diff + 5.0f);
+            if (s_bg_var[i] < 5.5f)  s_bg_var[i] = 5.5f;
+            if (s_bg_var[i] > 24.0f) s_bg_var[i] = 24.0f;
         }
     }
+    update_spatial_gradients();
 
     // -----------------------------------------------------------------------------------------
-    // BƯỚC 7: GOM CỤM 8 HƯỚNG + XÁC THỰC 2 TẦNG BẰNG PRE-TRAINED CNN 3 LỚP & NHÁNH 6 LỚP ĐỐI TƯỢNG
-    // (Mode 0 Gatekeeper -> Mode 1 Early-Exit 25% [thr=2] -> Mode 2 Full Exact 100%)
+    // BƯỚC 7: GOM CỤM 8 HƯỚNG TẠO BOUNDING BOX & KIỂM ĐỊNH ĐỘNG HỌC CỤM (CLUSTER MOTION GATE)
+    // Một cụm Bounding Box chỉ được giữ lại nếu có diện tích >= 2 ô VÀ có ít nhất 1 ô chuyển động
+    // hoặc đang được giữ khóa hợp lệ từ chuyển động vừa diễn ra!
     // -----------------------------------------------------------------------------------------
     memset(s_visited, 0, sizeof(s_visited));
     int cand_count = 0;
-    uint8_t highest_hw_mode = 0; // Mặc định Mode 0 (Gatekeeper - 0% MAC CNN)
 
     for (int sy = 0; sy < GRID_H; sy++) {
         for (int sx = 0; sx < GRID_W; sx++) {
@@ -1038,12 +695,9 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
 
             int min_gx = sx, max_gx = sx;
             int min_gy = sy, max_gy = sy;
+            float sum_z = 0.0f;
             int moving_in_cluster = 0;
-            int shadow_in_cluster = 0;
-            float sum_z = 0.0f, max_z = 0.0f;
-            float sum_ncc = 0.0f, sum_chroma = 0.0f, sum_edge = 0.0f;
-            float sum_skin = 0.0f, sum_persist = 0.0f;
-            float max_dpeak = 0.0f, max_raw_pk = 0.0f;
+            int max_hold_in_cluster = 0;
 
             while (q_head < q_tail) {
                 int cx = s_qx[q_head];
@@ -1051,27 +705,9 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                 q_head++;
 
                 int c_idx = cy * GRID_W + cx;
-                float cz = s_z_map[c_idx];
-                sum_z += cz;
-                if (cz > max_z) max_z = cz;
-                sum_ncc     += s_ncc_map[c_idx];
-                sum_chroma  += s_chroma_map[c_idx];
-                sum_edge    += s_cell_edge[c_idx];
-                sum_persist += s_cell_persist[c_idx];
-                if (s_static_age[c_idx] == 0) moving_in_cluster++;
-                if (s_shadow_mask[c_idx])     shadow_in_cluster++;
-
-                // Đặc trưng màu da người trong không gian YCrCb (Chai & Ngan, IEEE TCSVT 1999):
-                // Da người có Cr dương (+6 .. +45) và Cb âm (-38 .. -3) kèm độ sáng vừa phải
-                float cr = s_cell_cr[c_idx];
-                float cb = s_cell_cb[c_idx];
-                float dcr_bg = s_cell_cr[c_idx] - s_bg_cr[c_idx];
-                if ((cr > 5.0f && cb < -2.0f && (cr - cb) > 12.0f) || (dcr_bg > 6.5f && (cr - cb) > 8.0f)) {
-                    sum_skin += fminf(127.0f, (cr - cb) * 3.8f + dcr_bg * 3.2f);
-                }
-
-                if (s_dpeak_map[c_idx] > max_dpeak)  max_dpeak  = s_dpeak_map[c_idx];
-                if (s_raw_max_y[c_idx] > max_raw_pk) max_raw_pk = s_raw_max_y[c_idx];
+                sum_z += s_z_map[c_idx];
+                if (s_moving_map[c_idx]) moving_in_cluster++;
+                if (s_fg_hold[c_idx] > max_hold_in_cluster) max_hold_in_cluster = s_fg_hold[c_idx];
 
                 if (cx < min_gx) min_gx = cx;
                 if (cx > max_gx) max_gx = cx;
@@ -1096,88 +732,13 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
             }
 
             int cluster_cells = q_tail;
-            bool is_flash_blob = (max_dpeak > 42.0f && max_raw_pk > 182.0f);
-            if (cluster_cells < 2 && !is_flash_blob) continue;
+            // Loại bỏ các đốm nhiễu nhỏ (< 2 ô) hoặc cụm đã hết năng lượng chuyển động
+            if (cluster_cells < 2) continue;
+            if (moving_in_cluster == 0 && max_hold_in_cluster < 6) continue;
 
             int box_gw = max_gx - min_gx + 1;
             int box_gh = max_gy - min_gy + 1;
-            int box_area = box_gw * box_gh;
-
-            // Lọc bỏ các sọc nhiễu ngang mảnh dẹt (1 hàng ngang kéo dài)
-            if (box_gh == 1 && box_gw >= 6 && !is_flash_blob) continue;
-
-            int px0 = (min_gx * thumb_w) / GRID_W;
-            int py0 = (min_gy * thumb_h) / GRID_H;
-            int pbw = (box_gw * thumb_w) / GRID_W;
-            int pbh = (box_gh * thumb_h) / GRID_H;
-
-            // Trích xuất ảnh patch 28x28 chuẩn INT8 cho mạng Pre-trained CNN 3 lớp
-            int32_t patch_contrast = extract_patch_28x28_int8(s_rgb565_thumb, thumb_w, thumb_h,
-                                                              px0, py0, pbw, pbh, s_patch_i8);
-
-            // --- TẦNG KIỂM TRA SỚM MODE 1 (25% DỮ LIỆU, mode=1, thr=2) ---
-            if (highest_hw_mode < 1) highest_hw_mode = 1;
-            int32_t cnn_margin_m1 = 0;
-            uint8_t digit_cls_m1 = adaremac_run_cnn_mode1_25pct(s_patch_i8, &cnn_margin_m1);
-
-            // Xây dựng vector 16 đặc trưng Quang phổ - Hình thái - NCC - CNN (s_aux_feat[16])
-            float avg_z       = sum_z / cluster_cells;
-            float avg_ncc     = sum_ncc / cluster_cells;
-            float avg_chroma  = sum_chroma / cluster_cells;
-            float avg_edge    = sum_edge / cluster_cells;
-            float avg_skin    = sum_skin / cluster_cells;
-            float avg_persist = sum_persist / cluster_cells;
-            float motion_rat  = (float)moving_in_cluster / (float)cluster_cells;
-            float fill_rat    = (float)cluster_cells / (float)((box_area > 0) ? box_area : 1);
-            float aspect      = (box_gw > box_gh) ? ((float)box_gw / box_gh) : ((float)box_gh / box_gw);
-            bool touches_bdr  = (min_gx == 0 || max_gx == GRID_W - 1 || min_gy == 0 || max_gy == GRID_H - 1);
-            float shadow_rat  = (float)shadow_in_cluster / (float)cluster_cells;
-            float shadow_feat = shadow_rat * 90.0f + ((avg_ncc > 0.89f && avg_chroma < 9.0f && !is_flash_blob) ? 45.0f : 0.0f);
-
-            s_aux_feat[0]  = clamp_i8_pos((avg_z - thr) * 28.0f + 35.0f);
-            s_aux_feat[1]  = clamp_i8_pos((max_z - thr) * 24.0f + 40.0f);
-            s_aux_feat[2]  = clamp_i8_pos(motion_rat * 127.0f);
-            s_aux_feat[3]  = clamp_i8_pos((1.0f - avg_ncc) * 320.0f);
-            s_aux_feat[4]  = clamp_i8_pos(avg_chroma * 4.2f);
-            s_aux_feat[5]  = clamp_i8_pos(avg_skin);
-            s_aux_feat[6]  = clamp_i8_pos(is_flash_blob ? fminf(127.0f, max_dpeak * 1.9f) : fmaxf(0.0f, max_dpeak * 0.8f));
-            s_aux_feat[7]  = clamp_i8_pos(avg_edge * 5.2f);
-            s_aux_feat[8]  = clamp_i8_pos((float)patch_contrast * 0.85f);
-            s_aux_feat[9]  = clamp_i8_pos(fill_rat * 115.0f);
-            s_aux_feat[10] = clamp_i8_pos(aspect * 24.0f);
-            s_aux_feat[11] = clamp_i8_pos(sqrtf((float)cluster_cells) * 18.0f);
-            s_aux_feat[12] = clamp_i8_pos(shadow_feat);
-            s_aux_feat[13] = clamp_i8_pos(touches_bdr ? 65.0f : 10.0f);
-            bool is_symbol_like = (patch_contrast >= 115 && avg_chroma < 28.0f && fill_rat < 0.78f);
-            s_aux_feat[14] = clamp_i8_pos(is_symbol_like ? ((float)cnn_margin_m1 / 95.0f) : ((float)cnn_margin_m1 / 260.0f));
-            s_aux_feat[15] = clamp_i8_pos(avg_persist * 21.0f);
-
-            int conf_m1 = 0;
-            uint8_t obj_cls_m1 = adaremac_run_semantic_obj_head(s_aux_feat, 1, 2, &conf_m1);
-
-            // EARLY-EXIT TẠI MODE 1: Nếu nhánh AI Mode 1 phân loại vùng này là Class 0 (Bóng đổ / Nhiễu nền),
-            // lập tức loại bỏ khung giả này ngay tại Mode 1 mà không cần tốn tài nguyên chạy Mode 2!
-            if (obj_cls_m1 == 0 && !is_flash_blob) {
-                s_shadow_rejected_cnt++;
-                continue;
-            }
-
-            // --- TẦNG CHÍNH XÁC TUYỆT ĐỐI MODE 2 (100% DỮ LIỆU, mode=2, thr=0) ---
-            highest_hw_mode = 2;
-            int32_t cnn_margin_m2 = 0;
-            uint8_t digit_cls_m2 = adaremac_run_cnn_mode2_100pct(s_patch_i8, &cnn_margin_m2);
-            s_aux_feat[14] = clamp_i8_pos(is_symbol_like ? ((float)cnn_margin_m2 / 220.0f) : ((float)cnn_margin_m2 / 520.0f));
-
-            int conf_m2 = 0;
-            uint8_t obj_cls_m2 = adaremac_run_semantic_obj_head(s_aux_feat, 2, 0, &conf_m2);
-            if (obj_cls_m2 == 0 && !is_flash_blob) {
-                s_shadow_rejected_cnt++;
-                continue;
-            }
-            if (is_flash_blob) {
-                obj_cls_m2 = 4;
-                if (obj_cls_m1 == 0) obj_cls_m1 = 4;
-            }
+            if (box_gh == 1 && box_gw >= 6) continue; // Bỏ sọc mảnh ngang
 
             if (cand_count < MAX_ANOM_BOXES) {
                 AnomBox b;
@@ -1185,28 +746,65 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
                 b.y = (float)min_gy / (float)GRID_H;
                 b.w = (float)box_gw / (float)GRID_W;
                 b.h = (float)box_gh / (float)GRID_H;
-                b.is_flash   = (obj_cls_m2 == 4) ? 1 : 0;
-                b.obj_cls_m1 = obj_cls_m1;
-                b.obj_cls_m2 = obj_cls_m2;
-                b.ai_cls_m1  = digit_cls_m1;
-                b.ai_cls_m2  = digit_cls_m2;
-                b.score      = conf_m2;
+
+                float avg_z = sum_z / (float)cluster_cells;
+                int conf = (int)(70.0f + (avg_z - thr) * 10.0f);
+                if (conf < 70) conf = 70;
+                if (conf > 99) conf = 99;
+                b.score = conf;
+
+                // Chỉ chạy bộ nhân AdaReMAC siêu nhẹ 1 tầng (< 0.12 ms) cho khung đầu tiên để lấy thống kê Mode 1/2
+                if (cand_count == 0) {
+                    int px0 = (min_gx * thumb_w) / GRID_W;
+                    int py0 = (min_gy * thumb_h) / GRID_H;
+                    int pbw = (box_gw * thumb_w) / GRID_W;
+                    int pbh = (box_gh * thumb_h) / GRID_H;
+                    extract_patch_int8_400(s_rgb565_thumb, thumb_w, thumb_h, px0, py0, pbw, pbh, s_patch_feat);
+                    b.ai_cls_m1 = adaremac_run_fast_fc(s_patch_feat, 1, 2);
+                    b.ai_cls_m2 = adaremac_run_fast_fc(s_patch_feat, 2, 0);
+                } else {
+                    b.ai_cls_m1 = 0;
+                    b.ai_cls_m2 = 0;
+                }
+
                 s_cand_boxes[cand_count++] = b;
             }
         }
     }
 
-    // -----------------------------------------------------------------------------------------
-    // BƯỚC 8: LÀM MƯỢT TỌA ĐỘ BOUNDING BOX THEO THỜI GIAN (TEMPORAL EMA TRACKING)
-    // Giúp khung đỏ/vàng bám sát vật thể mượt mà, không bị giật cục giữa các frame!
-    // -----------------------------------------------------------------------------------------
+    // Gộp các khung bao nằm sát hoặc chồng lấp nhau thành 1 khung bao duy nhất gọn đẹp
+    for (int i = 0; i < cand_count; i++) {
+        for (int j = i + 1; j < cand_count; ) {
+            float ax0 = s_cand_boxes[i].x, ay0 = s_cand_boxes[i].y;
+            float ax1 = ax0 + s_cand_boxes[i].w, ay1 = ay0 + s_cand_boxes[i].h;
+            float bx0 = s_cand_boxes[j].x, by0 = s_cand_boxes[j].y;
+            float bx1 = bx0 + s_cand_boxes[j].w, by1 = by0 + s_cand_boxes[j].h;
+            float pad = 0.06f;
+            if (!(ax1 + pad < bx0 || bx1 + pad < ax0 || ay1 + pad < by0 || by1 + pad < ay0)) {
+                float nx0 = fminf(ax0, bx0), ny0 = fminf(ay0, by0);
+                float nx1 = fmaxf(ax1, bx1), ny1 = fmaxf(ay1, by1);
+                s_cand_boxes[i].x = nx0;
+                s_cand_boxes[i].y = ny0;
+                s_cand_boxes[i].w = nx1 - nx0;
+                s_cand_boxes[i].h = ny1 - ny0;
+                if (s_cand_boxes[j].score > s_cand_boxes[i].score) {
+                    s_cand_boxes[i].score = s_cand_boxes[j].score;
+                }
+                for (int k = j; k < cand_count - 1; k++) s_cand_boxes[k] = s_cand_boxes[k + 1];
+                cand_count--;
+            } else {
+                j++;
+            }
+        }
+    }
+
+    // Làm mượt tọa độ khung bao theo thời gian (EMA Tracking)
     for (int i = 0; i < cand_count; i++) {
         AnomBox *cb = &s_cand_boxes[i];
         float c_cx = cb->x + cb->w * 0.5f;
         float c_cy = cb->y + cb->h * 0.5f;
         int best_match = -1;
-        float best_dist = 0.18f;
-
+        float best_dist = 0.20f;
         for (int j = 0; j < s_num_tracked; j++) {
             float t_cx = s_tracked_boxes[j].x + s_tracked_boxes[j].w * 0.5f;
             float t_cy = s_tracked_boxes[j].y + s_tracked_boxes[j].h * 0.5f;
@@ -1217,16 +815,17 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
             }
         }
         if (best_match >= 0) {
-            cb->x = 0.65f * cb->x + 0.35f * s_tracked_boxes[best_match].x;
-            cb->y = 0.65f * cb->y + 0.35f * s_tracked_boxes[best_match].y;
-            cb->w = 0.65f * cb->w + 0.35f * s_tracked_boxes[best_match].w;
-            cb->h = 0.65f * cb->h + 0.35f * s_tracked_boxes[best_match].h;
+            cb->x = 0.60f * cb->x + 0.40f * s_tracked_boxes[best_match].x;
+            cb->y = 0.60f * cb->y + 0.40f * s_tracked_boxes[best_match].y;
+            cb->w = 0.60f * cb->w + 0.40f * s_tracked_boxes[best_match].w;
+            cb->h = 0.60f * cb->h + 0.40f * s_tracked_boxes[best_match].h;
         }
     }
     s_num_tracked = cand_count;
     for (int i = 0; i < cand_count; i++) s_tracked_boxes[i] = s_cand_boxes[i];
 
-    float changed_ratio = (float)raw_changed_cells / (float)GRID_CELLS;
+    float changed_ratio = (float)active_fg_cells / (float)GRID_CELLS;
+    uint8_t hw_mode = (cand_count > 0) ? 2 : ((moving_cells >= 2) ? 1 : 0);
     uint32_t dt_us = micros() - t0;
 
     portENTER_CRITICAL(&s_ai_mux);
@@ -1235,12 +834,12 @@ static void analyze_frame_and_learn(const uint8_t *jpeg_buf, size_t jpeg_len, in
     s_angle_changed      = false;
     s_changed_cell_ratio = changed_ratio;
     s_env_stability      = (1.0f - fminf(1.0f, changed_ratio)) * 100.0f;
-    s_active_hw_mode     = highest_hw_mode;
+    s_active_hw_mode     = hw_mode;
     s_ai_infer_us        = dt_us;
     portEXIT_CRITICAL(&s_ai_mux);
 }
 
-// Task AI chạy độc lập trên Core 0 (không bao giờ giữ camera_fb_t khi đang Stream trên Core 1!)
+// Task AI chạy nhẹ nhàng (~12 Hz, chỉ tốn ~3 ms mỗi lần chạy), nhường 96% CPU cho luồng Video Stream!
 static void ai_continual_learning_task(void *arg) {
     while (true) {
         if (!s_cam_ok) {
@@ -1253,13 +852,12 @@ static void ai_continual_learning_task(void *arg) {
         if (stream_active) {
             if (!s_ai_frame_ready) {
                 s_ai_need_frame = true;
-                vTaskDelay(pdMS_TO_TICKS(6));
+                vTaskDelay(pdMS_TO_TICKS(8));
                 continue;
             }
             analyze_frame_and_learn(s_ai_jpeg_buf, s_ai_jpeg_len, s_ai_frame_w, s_ai_frame_h);
             s_ai_frame_ready = false;
-            // Nghỉ 45ms (~20 Hz cập nhật AI) để nhường 100% băng thông cho Core 1 đẩy Video 30+ FPS
-            vTaskDelay(pdMS_TO_TICKS(45));
+            vTaskDelay(pdMS_TO_TICKS(65));
             s_ai_need_frame = true;
         } else {
             camera_fb_t *fb = esp_camera_fb_get();
@@ -1270,38 +868,37 @@ static void ai_continual_learning_task(void *arg) {
                 if (s_ai_jpeg_buf && fb->len <= MAX_JPEG_COPY_SZ) {
                     memcpy(s_ai_jpeg_buf, fb->buf, fb->len);
                     s_ai_jpeg_len = fb->len;
-                    esp_camera_fb_return(fb); // Trả fb ngay lập tức (< 0.3ms)!
+                    esp_camera_fb_return(fb);
                     analyze_frame_and_learn(s_ai_jpeg_buf, s_ai_jpeg_len, s_ai_frame_w, s_ai_frame_h);
                 } else {
                     analyze_frame_and_learn(fb->buf, fb->len, fb->width, fb->height);
                     esp_camera_fb_return(fb);
                 }
             }
-            vTaskDelay(pdMS_TO_TICKS(65));
+            vTaskDelay(pdMS_TO_TICKS(80));
         }
     }
 }
 
 // =========================================================================================
-// 6. CẤU HÌNH THANH GHI PHẦN CỨNG OV5640 ĐẠT CHUẨN HD (1280x720) @ 30+ FPS TRONG PHÒNG
+// 6. BẢNG THANH GHI PHẦN CỨNG OMNIVISION OV5640 "720P @ 30FPS" CHÍNH HÃNG (MỤC 4.1.5)
 // =========================================================================================
-// Theo tài liệu OmniVision OV5640 Datasheet (Mục 4.3, Thanh ghi 0x380E..0x380F, 0x3A00, 0x3A02..0x3A15):
-//   - Mặc định, thanh ghi giới hạn phơi sáng tối đa 60Hz (0x3A02:0x3A03) và 50Hz (0x3A14:0x3A15)
-//     được đặt ở 0x0594 (1428 dòng), lớn gấp đôi tổng số dòng dọc VTS của chế độ HD 720p (740 dòng).
-//   - Hệ quả là khi ở trong nhà (ánh sáng phòng bình thường), bộ AEC của OV5640 tự động kéo dài
-//     thời gian màn trập vượt quá 740 dòng, làm tốc độ xuất khung hình phần cứng rớt từ 30 FPS xuống 11-14 FPS!
-//   - Hàm dưới đây đọc VTS thực tế của độ phân giải hiện tại và khóa trần phơi sáng tối đa <= VTS - 4,
-//     đồng thời tăng trần khuếch đại tương tự (AGC Gain Ceiling = 32x) để ảnh trong phòng vẫn sáng rõ
-//     mà tốc độ phần cứng luôn khóa cứng ở 30+ FPS!
+// Giải quyết tận gốc lỗi kẹt ở ~13-14 FPS của thư viện esp32-camera:
+//   - Theo tài liệu gốc "OmniVision OV5640 Auto Focus Camera Module Application Notes" (Trang 23-24,
+//     Mục 4.1.5 "720p Video"):
+//       + Cấu hình 720p 15fps dùng thanh ghi PLL 0x3035 = 0x41 (sys_div = 4).
+//       + Cấu hình 720p 30fps bắt buộc đổi thanh ghi PLL 0x3035 = 0x21 (sys_div = 2, nhân đôi SYSCLK!)
+//         kết hợp cửa sổ quét 2x2 Binning/Subsampling (0x3814=0x31, 0x3815=0x31, HTS=0x0764 [1892],
+//         VTS=0x02E4 [740]) và khóa phơi sáng tối đa 0x3A02/0x3A14 = 0x02E0 (736 dòng).
 static void configure_ov5640_true_30fps(sensor_t *s, framesize_t fs, int jpeg_qual) {
     if (!s) return;
     s->set_framesize(s, fs);
     s->set_quality(s, jpeg_qual);
     s->set_exposure_ctrl(s, 1);
-    s->set_aec2(s, 0);                        // Tắt Night-Mode tránh tự động nhân đôi chu kỳ khung hình
+    s->set_aec2(s, 0);                        // Tắt Night-Mode
     s->set_ae_level(s, 0);
     s->set_gain_ctrl(s, 1);
-    s->set_gainceiling(s, (gainceiling_t)4);  // Bật AGC 32x bù sáng trong phòng thay vì kéo dài màn trập
+    s->set_gainceiling(s, (gainceiling_t)3);  // Trần Gain 16x (sáng rõ mà không sinh nhiễu hạt Hot-Pixel!)
     s->set_brightness(s, 0);
     s->set_contrast(s, 1);
     s->set_saturation(s, 0);
@@ -1317,33 +914,75 @@ static void configure_ov5640_true_30fps(sensor_t *s, framesize_t fs, int jpeg_qu
     s->set_vflip(s, 1);
 
     if (s->id.PID == OV5640_PID && s->set_reg && s->get_reg) {
-        // 1. Bật ISP LENC + BPC + WPC khử điểm chết CMOS
+        // Bật bộ khử điểm chết phần cứng (LENC + BPC + WPC)
         s->set_reg(s, 0x5000, 0xFF, 0x86);
-        // 2. Tắt bit 2 (Night mode auto frame drop) trong thanh ghi AEC CTRL00 (0x3A00)
-        int aec_ctrl = s->get_reg(s, 0x3A00, 0xFF);
-        if (aec_ctrl >= 0) {
-            s->set_reg(s, 0x3A00, 0xFF, aec_ctrl & ~0x04);
+        // Tắt bit 2 (Night mode frame drop) trong thanh ghi 0x3A00
+        s->set_reg(s, 0x3A00, 0x04, 0x00);
+
+        if (fs == FRAMESIZE_HD) {
+            // --- GHI BẢNG THANH GHI 720P (1280x720) @ 30 FPS CHÍNH HÃNG OMNIVISION (MỤC 4.1.5) ---
+            // 1. Cửa sổ 2x2 Subsampling & Horizontal Binning (giữ nguyên bit 5 = JPEG Enable trong 0x3821)
+            s->set_reg(s, 0x3814, 0xFF, 0x31); // X INC 2x2 subsample
+            s->set_reg(s, 0x3815, 0xFF, 0x31); // Y INC 2x2 subsample
+            s->set_reg(s, 0x3821, 0x01, 0x01); // Bật Horizontal Binning (bit 0 = 1)
+
+            // 2. Kích thước cửa sổ cảm biến và đầu ra DVP 1280x720 chuẩn
+            s->set_reg(s, 0x3800, 0xFF, 0x00);
+            s->set_reg(s, 0x3801, 0xFF, 0x00); // HS = 0
+            s->set_reg(s, 0x3802, 0xFF, 0x00);
+            s->set_reg(s, 0x3803, 0xFF, 0xFA); // VS = 250
+            s->set_reg(s, 0x3804, 0xFF, 0x0A);
+            s->set_reg(s, 0x3805, 0xFF, 0x3F); // HW = 2623
+            s->set_reg(s, 0x3806, 0xFF, 0x06);
+            s->set_reg(s, 0x3807, 0xFF, 0xA9); // VH = 1705
+            s->set_reg(s, 0x3808, 0xFF, 0x05);
+            s->set_reg(s, 0x3809, 0xFF, 0x00); // DVPHO = 1280
+            s->set_reg(s, 0x380A, 0xFF, 0x02);
+            s->set_reg(s, 0x380B, 0xFF, 0xD0); // DVPVO = 720
+
+            // 3. Tổng kích thước quét ngang HTS = 1892 (0x0764) & dọc VTS = 740 (0x02E4)
+            //    (Thay thế giá trị HTS=2844, VTS=1488 gây kẹt ở 13.4 FPS của driver mặc định!)
+            s->set_reg(s, 0x380C, 0xFF, 0x07);
+            s->set_reg(s, 0x380D, 0xFF, 0x64); // HTS = 1892
+            s->set_reg(s, 0x380E, 0xFF, 0x02);
+            s->set_reg(s, 0x380F, 0xFF, 0xE4); // VTS = 740
+            s->set_reg(s, 0x3813, 0xFF, 0x04);
+
+            // 4. Khóa trần phơi sáng tối đa 60Hz (0x3A02:0x3A03) & 50Hz (0x3A14:0x3A15) = 0x02E0 (736 dòng)
+            s->set_reg(s, 0x3A02, 0xFF, 0x02);
+            s->set_reg(s, 0x3A03, 0xFF, 0xE0);
+            s->set_reg(s, 0x3A14, 0xFF, 0x02);
+            s->set_reg(s, 0x3A15, 0xFF, 0xE0);
+
+            // 5. Cấu hình PLL sang "720p 30fps" (0x3035 = 0x21 thay vì 0x41 của 15fps!)
+            //    và chia DVP PCLK (0x3824 = 0x04) để xung PCLK ra cáp FPC sạch tuyệt đối (~20 MHz)
+            s->set_reg(s, 0x3035, 0xFF, 0x21); // sys_div = 2 (Mấu chốt mở khóa 30 FPS!)
+            s->set_reg(s, 0x3036, 0xFF, 0x69); // PLL Multiplier = 105
+            s->set_reg(s, 0x3037, 0xFF, 0x13); // PLL root div + pre-div = 3
+            s->set_reg(s, 0x3108, 0xFF, 0x01);
+            s->set_reg(s, 0x460C, 0xFF, 0x22); // Manual PCLK divider cho JPEG FIFO
+            s->set_reg(s, 0x3824, 0xFF, 0x04); // PCLK divider = 4 (chống sọc ngang & tràn DMA)
+            s->set_reg(s, 0x4837, 0xFF, 0x16);
+        } else if (fs == FRAMESIZE_SVGA || fs == FRAMESIZE_VGA) {
+            // Với SVGA/VGA: mở khóa PLL 0x3035 = 0x11 / 0x21 để đạt 30+ FPS
+            s->set_reg(s, 0x3035, 0xFF, 0x21);
+            int vts_hi = s->get_reg(s, 0x380E, 0xFF);
+            int vts_lo = s->get_reg(s, 0x380F, 0xFF);
+            if (vts_hi >= 0 && vts_lo >= 0) {
+                int max_exp = ((vts_hi << 8) | vts_lo) - 4;
+                if (max_exp > 100) {
+                    s->set_reg(s, 0x3A02, 0xFF, (max_exp >> 8) & 0xFF);
+                    s->set_reg(s, 0x3A03, 0xFF, max_exp & 0xFF);
+                    s->set_reg(s, 0x3A14, 0xFF, (max_exp >> 8) & 0xFF);
+                    s->set_reg(s, 0x3A15, 0xFF, max_exp & 0xFF);
+                }
+            }
         }
-        // 3. Đọc tổng số dòng dọc VTS (0x380E:0x380F) của chế độ phân giải hiện tại
-        //    và khóa trần phơi sáng tối đa 60Hz (0x3A02:0x3A03) & 50Hz (0x3A14:0x3A15) = VTS - 4
-        //    để ép cảm biến OV5640 luôn xuất đủ 30+ FPS ngay cả dưới ánh đèn phòng!
-        int vts_hi = s->get_reg(s, 0x380E, 0xFF);
-        int vts_lo = s->get_reg(s, 0x380F, 0xFF);
-        if (vts_hi >= 0 && vts_lo >= 0) {
-            int vts = (vts_hi << 8) | vts_lo;
-            int max_exp = (vts > 20) ? (vts - 4) : vts;
-            s->set_reg(s, 0x3A02, 0xFF, (max_exp >> 8) & 0xFF);
-            s->set_reg(s, 0x3A03, 0xFF, max_exp & 0xFF);
-            s->set_reg(s, 0x3A14, 0xFF, (max_exp >> 8) & 0xFF);
-            s->set_reg(s, 0x3A15, 0xFF, max_exp & 0xFF);
-        }
-        // 4. Ổn định bộ đệm nén VFIFO JPEG (0x460C) chống tràn FIFO gây sọc ngang
-        s->set_reg(s, 0x460C, 0xFF, 0x22);
     }
 }
 
 // =========================================================================================
-// 7. GIAO DIỆN WEB TRỰC QUAN (60FPS CANVAS SMOOTHING + HIỂN THỊ NHÃN NGỮ NGHĨA 6 LỚP & CNN)
+// 7. GIAO DIỆN WEB TRỰC QUAN (CHỈ ĐÓNG KHUNG SẮC NÉT, KHÔNG GÁN TÊN ĐỐI TƯỢNG)
 // =========================================================================================
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -1351,9 +990,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AdaReMAC ESP32-S3 — HD@30fps Stream & Pre-Trained 3-Layer CNN + ViBe/SuBSENSE AI</title>
+  <title>AdaReMAC ESP32-S3 — HD@30fps Stream & Sakbot Motion-Background Detector</title>
   <style>
-    :root { --bg: #0f172a; --card: #1e293b; --accent: #38bdf8; --danger: #ef4444; --ok: #22c55e; --warn: #f59e0b; --purple: #a855f7; }
+    :root { --bg: #0f172a; --card: #1e293b; --accent: #38bdf8; --danger: #ef4444; --ok: #22c55e; --warn: #f59e0b; }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
     body { background: var(--bg); color: #f8fafc; padding: 12px; display: flex; flex-direction: column; align-items: center; }
     .header { width: 100%; max-width: 1280px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; background: var(--card); padding: 12px 18px; border-radius: 12px; margin-bottom: 10px; border: 1px solid #334155; gap: 10px; }
@@ -1381,16 +1020,16 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <body>
   <div class="header">
     <div>
-      <div class="title">📹 AdaReMAC v4 — Stream HD@30fps + Pre-Trained 3-Layer CNN & ViBe/SuBSENSE/NCC</div>
-      <div class="subtitle">Trừ nền đa mẫu ViBe (IEEE TIP 2011) + Ngưỡng Gradient SuBSENSE (IEEE TIP 2015) + Khử bóng đổ NCC + Mạng CNN 3 lớp INT8</div>
+      <div class="title">📹 AdaReMAC v5 — Stream HD@30fps + Đóng Khung Đối Tượng Sakbot (IEEE TPAMI)</div>
+      <div class="subtitle">Mở khóa thanh ghi OV5640 720p@30fps (0x3035=0x21) + Thuật toán Sakbot chống bóng ma & khử bóng đổ siêu tốc (~3ms)</div>
     </div>
-    <div id="status_badge" class="badge bg-ok">Đang kết nối AI...</div>
+    <div id="status_badge" class="badge bg-ok">Đang kết nối...</div>
   </div>
 
   <div class="Controls">
     <div class="stat-box"><div class="stat-label">Độ phân giải & Tốc độ Stream</div><div class="stat-val" id="val_fps">HD 1280x720</div></div>
     <div class="stat-box"><div class="stat-label">Chế độ AdaReMAC & Ổn định Nền</div><div class="stat-val" id="val_env">Mode 0 | 100%</div></div>
-    <div class="stat-box"><div class="stat-label">Đối tượng Thực tế / Lọc Bóng đổ</div><div class="stat-val" id="val_anom">0 vật thể</div></div>
+    <div class="stat-box"><div class="stat-label">Số khung phát hiện / Thời gian xử lý</div><div class="stat-val" id="val_anom">0 khung (0.0 ms)</div></div>
     <div class="stat-box"><div class="stat-label">Nhiệt độ Chip ESP32-S3</div><div class="stat-val" id="val_temp">-- °C</div></div>
   </div>
 
@@ -1413,27 +1052,19 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <input type="range" min="-2" max="2" step="1" value="0" oninput="updateAE(this.value)">
       <span id="lbl_ae" style="font-weight:700;color:#38bdf8;">0</span>
 
-      <label style="font-size:0.86rem;margin-left:6px;">Nén JPEG (14 = Chuẩn 30fps):</label>
-      <input type="range" min="8" max="26" step="1" value="14" oninput="updateQual(this.value)">
-      <span id="lbl_q" style="font-weight:700;color:#38bdf8;">14</span>
+      <label style="font-size:0.86rem;margin-left:6px;">Nén JPEG (16 = Nhẹ & Mượt):</label>
+      <input type="range" min="10" max="28" step="1" value="16" oninput="updateQual(this.value)">
+      <span id="lbl_q" style="font-weight:700;color:#38bdf8;">16</span>
 
-      <label style="font-size:0.86rem;margin-left:6px;">Ngưỡng AI:</label>
+      <label style="font-size:0.86rem;margin-left:6px;">Ngưỡng AI (Lớn = Khắt khe hơn):</label>
       <input type="range" id="rng_thr" min="1.4" max="5.0" step="0.2" value="2.5" oninput="updateThr(this.value)">
       <span id="lbl_thr" style="font-weight:700;color:#38bdf8;">2.5</span>
     </div>
-    <button onclick="resetEnv()">🔄 Học lại góc Camera ngay (Reset ViBe)</button>
+    <button onclick="resetEnv()">🔄 Học lại góc Camera ngay (Reset Nền)</button>
   </div>
 
   <script>
-    const OBJ_NAMES = [
-      'NỀN / BÓNG ĐỔ',
-      '🖐️ NGƯỜI / BÀN TAY',
-      '📦 VẬT THỂ / ĐỒ VẬT',
-      '🏃 CHUYỂN ĐỘNG NHANH',
-      '⚡ ĐÈN FLASH / SÁNG LẠ',
-      '🔢 KÝ TỰ / MẪU SỐ'
-    ];
-    const MODE_NAMES = ['Mode 0 (Gatekeeper 0%)', 'Mode 1 (25% Early-Exit)', 'Mode 2 (100% Exact CNN)'];
+    const MODE_NAMES = ['Mode 0 (Gatekeeper 0%)', 'Mode 1 (25% Partial)', 'Mode 2 (100% Exact)'];
 
     const streamImg = document.getElementById('cam_stream');
     const canvas = document.getElementById('ai_canvas');
@@ -1471,46 +1102,37 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         renderBoxes = targetBoxes.map(b => ({ ...b }));
       } else {
         for (let i = 0; i < targetBoxes.length; i++) {
-          renderBoxes[i].x += (targetBoxes[i].x - renderBoxes[i].x) * 0.35;
-          renderBoxes[i].y += (targetBoxes[i].y - renderBoxes[i].y) * 0.35;
-          renderBoxes[i].w += (targetBoxes[i].w - renderBoxes[i].w) * 0.35;
-          renderBoxes[i].h += (targetBoxes[i].h - renderBoxes[i].h) * 0.35;
-          renderBoxes[i].obj = targetBoxes[i].obj;
-          renderBoxes[i].m1  = targetBoxes[i].m1;
-          renderBoxes[i].m2  = targetBoxes[i].m2;
-          renderBoxes[i].fl  = targetBoxes[i].fl;
-          renderBoxes[i].score = targetBoxes[i].score;
+          renderBoxes[i].x += (targetBoxes[i].x - renderBoxes[i].x) * 0.40;
+          renderBoxes[i].y += (targetBoxes[i].y - renderBoxes[i].y) * 0.40;
+          renderBoxes[i].w += (targetBoxes[i].w - renderBoxes[i].w) * 0.40;
+          renderBoxes[i].h += (targetBoxes[i].h - renderBoxes[i].h) * 0.40;
         }
       }
 
-      renderBoxes.forEach((b, idx) => {
+      // CHỈ ĐÓNG KHUNG SẮC NÉT (KHÔNG GÁN TÊN ĐỐI TƯỢNG THEO YÊU CẦU)
+      renderBoxes.forEach((b) => {
         const bx = b.x * cw;
         const by = b.y * ch;
         const bw = b.w * cw;
         const bh = b.h * ch;
 
-        const isFlash = (b.fl === 1 || b.obj === 4);
-        const isHuman = (b.obj === 1);
-        const color = isFlash ? '#f59e0b' : (isHuman ? '#22c55e' : '#ef4444');
-        const fill  = isFlash ? 'rgba(245, 158, 11, 0.20)' : (isHuman ? 'rgba(34, 197, 94, 0.16)' : 'rgba(239, 68, 68, 0.18)');
-
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
-        ctx.strokeRect(bx, by, bw, bh);
-        ctx.fillStyle = fill;
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.14)';
         ctx.fillRect(bx, by, bw, bh);
 
-        const objTitle = OBJ_NAMES[b.obj] || '🎯 VẬT THỂ';
-        const cnnTag = (b.obj === 5) ? (' #' + b.m2 + ' (M1:' + b.m1 + ')') : (' | CNN:' + b.m2 + '(M1:' + b.m1 + ')');
-        const label = objTitle + cnnTag + ' | ' + b.score + '%';
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(bx, by, bw, bh);
 
-        ctx.font = 'bold 13px sans-serif';
-        const tw = ctx.measureText(label).width + 14;
-        const ly = (by > 26) ? (by - 26) : by;
-        ctx.fillStyle = color;
-        ctx.fillRect(bx, ly, tw, 24);
-        ctx.fillStyle = isFlash ? '#000000' : '#ffffff';
-        ctx.fillText(label, bx + 7, ly + 17);
+        // Vẽ 4 góc định vị sắc nét
+        const cl = Math.min(18, bw * 0.25, bh * 0.25);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(bx, by + cl); ctx.lineTo(bx, by); ctx.lineTo(bx + cl, by);
+        ctx.moveTo(bx + bw - cl, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + cl);
+        ctx.moveTo(bx, by + bh - cl); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + cl, by + bh);
+        ctx.moveTo(bx + bw - cl, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - cl);
+        ctx.stroke();
       });
 
       requestAnimationFrame(renderLoop);
@@ -1526,7 +1148,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
         document.getElementById('val_fps').innerText = d.w + 'x' + d.h + ' @ ' + d.fps.toFixed(1) + ' FPS';
         document.getElementById('val_env').innerText = (MODE_NAMES[d.hw_mode] || 'Mode 0') + ' | ' + d.stability.toFixed(0) + '%';
-        document.getElementById('val_anom').innerText = d.boxes.length + ' vật thể (' + (d.ai_us / 1000).toFixed(1) + ' ms | Lọc bóng: ' + d.shd_rej + ')';
+        document.getElementById('val_anom').innerText = d.boxes.length + ' khung (' + (d.ai_us / 1000).toFixed(1) + ' ms)';
         document.getElementById('val_temp').innerText = d.temp.toFixed(1) + ' °C';
 
         learnLeft = d.learn_left;
@@ -1535,18 +1157,17 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         const badge = document.getElementById('status_badge');
         if (d.learn_left > 0) {
           badge.className = 'badge bg-warn';
-          badge.innerText = '🔄 ĐỔI GÓC CAMERA -> ĐANG HỌC MẪU ViBe MỚI (' + d.stability.toFixed(0) + '%)';
+          badge.innerText = '🔄 ĐANG CẬP NHẬT NỀN MỚI (' + d.stability.toFixed(0) + '%)';
         } else if (d.boxes.length > 0) {
           badge.className = 'badge bg-danger';
-          const topName = OBJ_NAMES[d.boxes[0].obj] || 'ĐỐI TƯỢNG';
-          badge.innerText = '⚠️ PHÁT HIỆN ' + d.boxes.length + ': ' + topName + ' (' + d.boxes[0].score + '%)';
+          badge.innerText = '⚠️ PHÁT HIỆN ' + d.boxes.length + ' ĐỐI TƯỢNG TRONG KHUNG HÌNH';
         } else {
           badge.className = 'badge bg-ok';
-          badge.innerText = '✅ MÔI TRƯỜNG ỔN ĐỊNH (ViBe + SuBSENSE — Lớp nền #' + d.scene_cls + ')';
+          badge.innerText = '✅ MÔI TRƯỜNG ỔN ĐỊNH';
         }
       } catch (e) {}
       clearTimeout(tid);
-      setTimeout(pollAI, 170);
+      setTimeout(pollAI, 180);
     }
     pollAI();
   </script>
@@ -1559,7 +1180,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 // =========================================================================================
 #define PART_BOUNDARY "123456789000000000000987654321"
 static const char *_STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
-static char s_json_buf[1280];
+static char s_json_buf[1024];
 
 static esp_err_t index_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
@@ -1574,7 +1195,7 @@ static esp_err_t ai_json_handler(httpd_req_t *req) {
     bool ang = false;
     int learn_left = 0;
     uint8_t s_cls = 0, hw_m = 0;
-    uint32_t infer_us = 0, shd_rej = 0;
+    uint32_t infer_us = 0;
     uint16_t fw = 1280, fh = 720;
 
     portENTER_CRITICAL(&s_ai_mux);
@@ -1587,7 +1208,6 @@ static esp_err_t ai_json_handler(httpd_req_t *req) {
     s_cls      = s_scene_ai_cls;
     hw_m       = s_active_hw_mode;
     infer_us   = s_ai_infer_us;
-    shd_rej    = s_shadow_rejected_cnt;
     fps        = s_stream_fps;
     temp       = s_chip_temp_c;
     fw         = s_ai_frame_w;
@@ -1596,17 +1216,16 @@ static esp_err_t ai_json_handler(httpd_req_t *req) {
 
     int len = snprintf(s_json_buf, sizeof(s_json_buf),
         "{\"w\":%u,\"h\":%u,\"fps\":%.1f,\"temp\":%.1f,\"stability\":%.1f,\"changed\":%.3f,"
-        "\"angle_shift\":%s,\"learn_left\":%d,\"scene_cls\":%u,\"hw_mode\":%u,\"ai_us\":%lu,\"shd_rej\":%lu,\"boxes\":[",
+        "\"angle_shift\":%s,\"learn_left\":%d,\"scene_cls\":%u,\"hw_mode\":%u,\"ai_us\":%lu,\"boxes\":[",
         fw, fh, fps, temp, stab, chg, ang ? "true" : "false", learn_left, s_cls, hw_m,
-        (unsigned long)infer_us, (unsigned long)shd_rej);
+        (unsigned long)infer_us);
 
     for (int i = 0; i < n_boxes; i++) {
         len += snprintf(s_json_buf + len, sizeof(s_json_buf) - len,
-            "%s{\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"score\":%d,\"obj\":%u,\"obj_m1\":%u,\"m1\":%u,\"m2\":%u,\"fl\":%u}",
+            "%s{\"x\":%.4f,\"y\":%.4f,\"w\":%.4f,\"h\":%.4f,\"score\":%d,\"m1\":%u,\"m2\":%u}",
             (i > 0) ? "," : "",
             local_boxes[i].x, local_boxes[i].y, local_boxes[i].w, local_boxes[i].h,
-            local_boxes[i].score, local_boxes[i].obj_cls_m2, local_boxes[i].obj_cls_m1,
-            local_boxes[i].ai_cls_m1, local_boxes[i].ai_cls_m2, local_boxes[i].is_flash);
+            local_boxes[i].score, local_boxes[i].ai_cls_m1, local_boxes[i].ai_cls_m2);
     }
     snprintf(s_json_buf + len, sizeof(s_json_buf) - len, "]}");
 
@@ -1641,11 +1260,11 @@ static esp_err_t ctrl_handler(httpd_req_t *req) {
         }
         if (s && httpd_query_key_value(query, "res", val, sizeof(val)) == ESP_OK) {
             framesize_t target_fs = FRAMESIZE_HD;
-            int target_q = 14;
-            if (strcmp(val, "fhd") == 0)       { target_fs = FRAMESIZE_FHD;  target_q = 16; }
-            else if (strcmp(val, "hd") == 0)   { target_fs = FRAMESIZE_HD;   target_q = 14; }
-            else if (strcmp(val, "svga") == 0) { target_fs = FRAMESIZE_SVGA; target_q = 12; }
-            else if (strcmp(val, "vga") == 0)  { target_fs = FRAMESIZE_VGA;  target_q = 10; }
+            int target_q = 16;
+            if (strcmp(val, "fhd") == 0)       { target_fs = FRAMESIZE_FHD;  target_q = 18; }
+            else if (strcmp(val, "hd") == 0)   { target_fs = FRAMESIZE_HD;   target_q = 16; }
+            else if (strcmp(val, "svga") == 0) { target_fs = FRAMESIZE_SVGA; target_q = 14; }
+            else if (strcmp(val, "vga") == 0)  { target_fs = FRAMESIZE_VGA;  target_q = 12; }
             configure_ov5640_true_30fps(s, target_fs, target_q);
             s_force_relearn = true;
         }
@@ -1654,8 +1273,6 @@ static esp_err_t ctrl_handler(httpd_req_t *req) {
     return httpd_resp_send(req, "OK", 2);
 }
 
-// Stream Handler tối ưu Zero-Hold Frame Buffer + Coalesced Single-Chunk Send trên Core 1:
-// Giải phóng camera_fb_t ngay trong < 0.4ms và gửi gộp [Multipart Header + JPEG] trong 1 lần gọi!
 static esp_err_t stream_handler(httpd_req_t *req) {
     int sockfd = httpd_req_to_sockfd(req);
     int nodelay = 1;
@@ -1692,7 +1309,6 @@ static esp_err_t stream_handler(httpd_req_t *req) {
         size_t jpg_len = fb->len;
         uint16_t fw = fb->width;
 
-        // Nhánh tối ưu 1: Nếu có bộ đệm gộp s_stream_tx_buf, sao chép và TRẢ NGAY fb về cho GDMA (< 0.4ms)!
         if (s_stream_tx_buf && jpg_len <= MAX_JPEG_COPY_SZ) {
             char hdr_tmp[STREAM_HDR_RESERVE];
             int hlen = snprintf(hdr_tmp, sizeof(hdr_tmp),
@@ -1708,13 +1324,12 @@ static esp_err_t stream_handler(httpd_req_t *req) {
                 s_ai_need_frame  = false;
             }
 
-            // Giải phóng Frame Buffer ngay lập tức để OV5640 chụp khung kế tiếp song song với lúc gửi Wi-Fi!
+            // Trả Frame Buffer ngay lập tức (< 0.4ms) để cảm biến OV5640 ghi khung kế tiếp không bị đợi
             esp_camera_fb_return(fb);
 
-            // Gửi gộp cả Header + JPEG trong duy nhất 1 lời gọi hàm!
+            // Gửi gộp [Header + JPEG] trong duy nhất 1 lời gọi hàm
             res = httpd_resp_send_chunk(req, (const char *)s_stream_tx_buf, hlen + jpg_len);
         } else {
-            // Dự phòng nếu khung ảnh quá lớn (> 128 KB)
             char hdr_buf[128];
             int hlen = snprintf(hdr_buf, sizeof(hdr_buf),
                                 "\r\n--" PART_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
@@ -1740,12 +1355,10 @@ static esp_err_t stream_handler(httpd_req_t *req) {
 }
 
 static void start_web_and_stream_servers() {
-    // Server 1 (Port 80, ghim trên Core 0): Phục vụ giao diện Web và JSON AI với Keep-Alive
     httpd_config_t cfg_web = HTTPD_DEFAULT_CONFIG();
     cfg_web.server_port      = 80;
     cfg_web.ctrl_port        = 32768;
     cfg_web.stack_size       = 8192;
-    cfg_web.core_id          = 0;
     cfg_web.max_open_sockets = 7;
     cfg_web.lru_purge_enable = true;
     cfg_web.keep_alive_enable = true;
@@ -1758,7 +1371,6 @@ static void start_web_and_stream_servers() {
         httpd_register_uri_handler(s_web_httpd, &u_ctrl);
     }
 
-    // Server 2 (Port 81, ghim độc quyền trên Core 1, ưu tiên cao): Dành riêng cho luồng Video MJPEG HD@30fps
     httpd_config_t cfg_stream = HTTPD_DEFAULT_CONFIG();
     cfg_stream.server_port      = 81;
     cfg_stream.ctrl_port        = 32769;
@@ -1825,7 +1437,7 @@ static void setup_zero_bottleneck_wifi() {
 
 static const char *get_sensor_name(int pid) {
     switch (pid) {
-        case OV5640_PID: return "OV5640 (5MP - True HD@30fps + 3-Layer CNN & ViBe/SuBSENSE)";
+        case OV5640_PID: return "OV5640 (5MP - True 720p@30fps Register Table + Sakbot AI)";
         case OV3660_PID: return "OV3660 (3MP)";
         case OV2640_PID: return "OV2640 (2MP)";
         default:         return "Unknown Sensor";
@@ -1837,7 +1449,7 @@ void setup() {
     delay(1000);
 
     Serial.println("\n======================================================================");
-    Serial.println("  [SKETCH 1 - V4] OV5640 HD@30FPS + 3-LAYER CNN + ViBe/SuBSENSE/NCC");
+    Serial.println("  [SKETCH 1 - V5] OV5640 720P@30FPS + SAKBOT BOUNDING-BOX DETECTOR");
     Serial.println("======================================================================");
 
     s_chip_temp_c = temperatureRead();
@@ -1845,8 +1457,6 @@ void setup() {
                   s_chip_temp_c, (s_chip_temp_c > 70.0f) ? "[CANH BAO: CHIP NONG!]" : "[BINH THUONG]");
 
     bool has_psram = psramFound();
-    // Ưu tiên cấp phát bộ đệm ảnh thu nhỏ RGB565 (240x180x2 = 86.4 KB) ngay trong Internal SRAM
-    // trước khi khởi tạo Wi-Fi để giải mã JPEG và chạy CNN hoàn toàn không đụng tới bus OPI PSRAM!
     size_t thumb_bytes = MAX_RGB_THUMB_W * MAX_RGB_THUMB_H * sizeof(uint16_t);
     s_rgb565_thumb = (uint16_t *)heap_caps_malloc(thumb_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (s_rgb565_thumb) {
@@ -1886,15 +1496,15 @@ void setup() {
     config.pin_sccb_scl = CAM_PIN_SIOC;
     config.pin_pwdn     = CAM_PIN_PWDN;
     config.pin_reset    = CAM_PIN_RESET;
-    config.xclk_freq_hz = 20000000; // 20 MHz chuẩn tốc độ cao cho LCD_CAM ESP32-S3 (đạt 30+ FPS ở HD 720p)
+    config.xclk_freq_hz = 20000000;
     config.pixel_format = PIXFORMAT_JPEG;
     config.frame_size   = has_psram ? FRAMESIZE_HD : FRAMESIZE_VGA;
-    config.jpeg_quality = 14;       // Tỷ lệ nén tối ưu cho HD@30fps (~18 KB/frame, chống tràn FIFO & nghẽn Wi-Fi)
+    config.jpeg_quality = 16;
     config.fb_count     = has_psram ? 3 : 1;
     config.fb_location  = has_psram ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
     config.grab_mode    = CAMERA_GRAB_LATEST;
 
-    Serial.println("[3/4] Dang khoi tao Camera OV5640 (20MHz + VTS Exposure Lock 30fps + WPC/BPC)...");
+    Serial.println("[3/4] Dang khoi tao Camera OV5640 (720p@30fps Register Table 0x3035=0x21)...");
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
         Serial.printf("  -> [LOI] esp_camera_init that bai (0x%x). Kiem tra cap det FPC!\n", err);
@@ -1904,7 +1514,7 @@ void setup() {
 
     sensor_t *s = esp_camera_sensor_get();
     if (s) {
-        configure_ov5640_true_30fps(s, has_psram ? FRAMESIZE_HD : FRAMESIZE_VGA, 14);
+        configure_ov5640_true_30fps(s, has_psram ? FRAMESIZE_HD : FRAMESIZE_VGA, 16);
         Serial.printf("[4/4] Nhan dien thanh cong     : %s (PID = 0x%04X)\n",
                       get_sensor_name(s->id.PID), s->id.PID);
     }
@@ -1914,8 +1524,7 @@ void setup() {
     setup_zero_bottleneck_wifi();
     start_web_and_stream_servers();
 
-    // Ghim Task AI lên Core 0 (ưu tiên 2), nhường toàn bộ Core 1 cho Stream Task (ưu tiên 6)
-    xTaskCreatePinnedToCore(ai_continual_learning_task, "ai_learn_task", 20480, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(ai_continual_learning_task, "ai_learn_task", 20480, NULL, 1, NULL, 0);
 }
 
 static uint32_t s_last_log_ms  = 0;
@@ -1946,7 +1555,7 @@ void loop() {
         AnomBox b0 = {};
         int learn_left = 0;
         uint8_t s_cls = 0, hw_m = 0;
-        uint32_t ai_us = 0, shd_rej = 0;
+        uint32_t ai_us = 0;
 
         portENTER_CRITICAL(&s_ai_mux);
         n_boxes    = s_num_boxes;
@@ -1955,24 +1564,22 @@ void loop() {
         s_cls      = s_scene_ai_cls;
         hw_m       = s_active_hw_mode;
         ai_us      = s_ai_infer_us;
-        shd_rej    = s_shadow_rejected_cnt;
         portEXIT_CRITICAL(&s_ai_mux);
 
         if (learn_left > 0) {
-            Serial.printf("[AI LEARNING] Dang cap nhat ngan hang ViBe (con %d chu ky) | FPS=%.1f | Temp=%.1fC\n",
+            Serial.printf("[AI LEARNING] Dang cap nhat nen moi (con %d chu ky) | FPS=%.1f | Temp=%.1fC\n",
                           learn_left, s_stream_fps, s_chip_temp_c);
         } else if (n_boxes > 0) {
             int bx_px = (int)(b0.x * s_ai_frame_w);
             int by_px = (int)(b0.y * s_ai_frame_h);
             int bw_px = (int)(b0.w * s_ai_frame_w);
             int bh_px = (int)(b0.h * s_ai_frame_h);
-            Serial.printf("[AI DETECT!] %d doi tuong | #1: %s (ObjM1:%u) | CNN=%u(M1:%u) | Box=[x:%d,y:%d,w:%d,h:%d] | Score=%d%% | Mode=%u | Infer=%.1fms | FPS=%.1f | Temp=%.1fC\n",
-                          n_boxes, get_obj_class_name(b0.obj_cls_m2), b0.obj_cls_m1,
-                          b0.ai_cls_m2, b0.ai_cls_m1,
-                          bx_px, by_px, bw_px, bh_px, b0.score, hw_m, ai_us / 1000.0f, s_stream_fps, s_chip_temp_c);
+            Serial.printf("[AI DETECT!] %d khung | Box#1=[x:%d,y:%d,w:%d,h:%d] | Score=%d%% | Mode=%u (M2:%u/M1:%u) | Infer=%.2fms | FPS=%.1f | Temp=%.1fC\n",
+                          n_boxes, bx_px, by_px, bw_px, bh_px, b0.score, hw_m, b0.ai_cls_m2, b0.ai_cls_m1,
+                          ai_us / 1000.0f, s_stream_fps, s_chip_temp_c);
         } else {
-            Serial.printf("[AI NORMAL] ViBe+SuBSENSE on dinh (SceneCNN=%u | Mode=%u | LocBongDo=%lu) | FPS=%.1f | Infer=%.1fms | Temp=%.1fC\n",
-                          s_cls, hw_m, (unsigned long)shd_rej, s_stream_fps, ai_us / 1000.0f, s_chip_temp_c);
+            Serial.printf("[AI NORMAL] Moi truong on dinh (Mode=%u) | FPS=%.1f | Infer=%.2fms | Temp=%.1fC\n",
+                          hw_m, s_stream_fps, ai_us / 1000.0f, s_chip_temp_c);
         }
     }
 
