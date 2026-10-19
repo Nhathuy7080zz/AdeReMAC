@@ -1,4 +1,5 @@
-// AdaReMAC core: SPI register file + MAC array + accuracy/activity counters.
+// AdaReMAC core: SPI register file + MAC array + accuracy/activity counters
+// + Hardware FOMO / Tiny-SSD Co-Processor MAC Engine (SPI Registers 0x30..0x37).
 // Da dat mac dinh N_LANES = 1 de ha nhiet do chip FPGA tren Tang Nano 20K.
 module adaremac_core #(
     parameter N_LANES = 1
@@ -34,21 +35,67 @@ module adaremac_core #(
         .wr_en(wr_en), .wr_addr(wr_addr), .wr_data(wr_data),
         .rd_addr(rd_addr), .rd_data(rd_data));
 
+    // ---------------- Hardware FOMO / Tiny-SSD Co-Processor MAC (0x30..0x37) ----------------
+    // Cho phep ESP32-S3 day truc tiep cac cap (Activation INT8, Weight INT8) cua
+    // FOMO 1x1 Conv Head & Tiny-SSD Box Regressor xuong FPGA Tang Nano 20K qua SPI:
+    //   - Ghi 0x30: Nap toan hang Activation co dau (fomo_a)
+    //   - Ghi 0x31: Nap toan hang Weight co dau (fomo_w) -> Tu dong nhan-cong 1 chu ky bang adaremac_mul!
+    //   - Ghi 0x32: Xoa thanh ghi tich luy fomo_acc (va nap Bias ban dau neu wr_data != 0)
+    //   - Doc 0x30..0x33: Doc ket qua tich luy 32-bit co dau fomo_acc[31:0]
+    //   - Doc 0x34: Doc dau ra ReLU + Requantize INT8: clamp(fomo_acc >>> 7, 0, 127)
+    //   - Doc 0x35: Co bao nhánh Residual (fomo_enr_last) cua phep nhan FOMO cuoi cung
+    //   - Doc 0x36..0x37: So phep MAC FOMO/SSD da thuc thi tren phan cung FPGA (fomo_mac_cnt)
+    reg  signed [7:0]  fomo_a, fomo_w;
+    reg  signed [31:0] fomo_acc;
+    reg  [15:0]        fomo_mac_cnt;
+    reg                fomo_enr_last;
+    reg                fomo_step;
+
+    wire [7:0]  fomo_ma  = fomo_a[7] ? (~fomo_a + 8'd1) : fomo_a;
+    wire [7:0]  fomo_mw  = fomo_w[7] ? (~fomo_w + 8'd1) : fomo_w;
+    wire        fomo_neg = fomo_a[7] ^ fomo_w[7];
+    wire [15:0] fomo_pmag;
+    wire        fomo_enr_w;
+
+    adaremac_mul u_fomo_mul (
+        .a(fomo_ma), .b(fomo_mw),
+        .mode(mode), .thr(thr),
+        .p(fomo_pmag), .enr(fomo_enr_w)
+    );
+
+    wire signed [31:0] fomo_prod = fomo_neg ? -$signed({16'd0, fomo_pmag}) : $signed({16'd0, fomo_pmag});
+    wire signed [24:0] fomo_shifted = fomo_acc[31:7];
+    wire [7:0]         fomo_relu_i8 = fomo_acc[31] ? 8'd0 :
+                                      ((fomo_shifted > 25'sd127) ? 8'd127 : fomo_shifted[7:0]);
+
     always @(posedge clk) begin
         snap      <= 1'b0;
         clr_stats <= 1'b0;
+        fomo_step <= 1'b0;
         if (!rst_n) begin
             mode <= 2'd0; thr <= 2'd2; run <= 1'b0; o_spi_seen <= 1'b0;
             wake_thr <= 8'h80;
-        end else if (wr_en) begin
-            o_spi_seen <= 1'b1;
-            case (wr_addr)
-                7'h00: mode <= wr_data[1:0];
-                7'h01: thr  <= wr_data[1:0];
-                7'h02: begin run <= wr_data[0]; snap <= wr_data[1]; clr_stats <= wr_data[2]; end
-                7'h05: wake_thr <= wr_data;
-                default: ;
-            endcase
+            fomo_a <= 8'sd0; fomo_w <= 8'sd0;
+            fomo_acc <= 32'sd0; fomo_mac_cnt <= 16'd0; fomo_enr_last <= 1'b0;
+        end else begin
+            if (fomo_step) begin
+                fomo_acc      <= fomo_acc + fomo_prod;
+                fomo_mac_cnt  <= fomo_mac_cnt + 16'd1;
+                fomo_enr_last <= fomo_enr_w;
+            end
+            if (wr_en) begin
+                o_spi_seen <= 1'b1;
+                case (wr_addr)
+                    7'h00: mode <= wr_data[1:0];
+                    7'h01: thr  <= wr_data[1:0];
+                    7'h02: begin run <= wr_data[0]; snap <= wr_data[1]; clr_stats <= wr_data[2]; end
+                    7'h05: wake_thr <= wr_data;
+                    7'h30: fomo_a   <= $signed(wr_data);
+                    7'h31: begin fomo_w <= $signed(wr_data); fomo_step <= 1'b1; end
+                    7'h32: begin fomo_acc <= {{24{wr_data[7]}}, wr_data}; fomo_mac_cnt <= 16'd0; end
+                    default: ;
+                endcase
+            end
         end
     end
 
@@ -104,6 +151,14 @@ module adaremac_core #(
             7'h1B: rd_data = err_s[31:24];
             7'h1C: rd_data = err_s[39:32];
             7'h20: rd_data = chk;
+            7'h30: rd_data = fomo_acc[7:0];
+            7'h31: rd_data = fomo_acc[15:8];
+            7'h32: rd_data = fomo_acc[23:16];
+            7'h33: rd_data = fomo_acc[31:24];
+            7'h34: rd_data = fomo_relu_i8;
+            7'h35: rd_data = {7'b0, fomo_enr_last};
+            7'h36: rd_data = fomo_mac_cnt[7:0];
+            7'h37: rd_data = fomo_mac_cnt[15:8];
             default: rd_data = 8'h00;
         endcase
     end

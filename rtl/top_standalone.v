@@ -2,25 +2,26 @@
 // (so phep tinh, so lan residual bat, tong sai so) in ra UART moi ~1 giay qua
 // chinh cap USB-C dang cam (BL616 lam cau USB<->serial), 115200 8N1.
 //
-// Da cap nhat chong nong chip & chong ket Reset:
+// Da cap nhat chong nong chip & ho tro day du nut Reset S1:
 //   1. N_LANES = 1 (chi chay 1 lane co bo giam sat sai so, giam 95% nhiet do).
-//   2. rst_n = por_done (khong phu thuoc chan 88 MODE0 de tranh ket Reset).
+//   2. rst_n = por_done & ~btn_rst (Pin 88 S1 co tro keo xuong GND tren board,
+//      binh thuong btn_rst = 0 -> rst_n = 1; khi nhan giu S1 btn_rst = 1 -> rst_n = 0).
 module top_standalone #(
     parameter N_LANES             = 1,
     parameter SNAPSHOT_CYCLES     = 27_000_000, // ~1s @ 27 MHz; testbench overrides this
     parameter BTN_DEBOUNCE_CYCLES = 270000      // ~10ms @ 27 MHz; testbench overrides this
 ) (
     input  wire        sys_clk,     // 27 MHz onboard (Pin 4)
-    input  wire        btn_rst,     // S1, pin 88 tren board
+    input  wire        btn_rst,     // S1, pin 88 tren board (Active-High khi nhan)
     input  wire        btn_mode,    // S2, pin 87 tren board (doi cau hinh)
     output wire        uart_tx_pin, // Pin 69 -> BL616 USB-UART
     output wire [5:0]  led_n        // Pin 15..20
 );
-    // Power-on reset tu dong (khong phu thuoc btn_rst de tranh treo khi chua bat Dual-Purpose Pin)
+    // Power-on reset tu dong ket hop nut nhan S1 (btn_rst)
     reg [7:0] por = 8'd0;
     wire      por_done = &por;
     always @(posedge sys_clk) if (!por_done) por <= por + 8'd1;
-    wire rst_n = por_done;
+    wire rst_n = por_done & ~btn_rst;
 
     // ---- nut S2: doi cau hinh 0..4 ----
     wire mode_pulse;

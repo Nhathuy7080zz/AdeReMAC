@@ -1,5 +1,6 @@
 `timescale 1ns/1ps
-// End-to-end test: bit-banged SPI master -> register file -> MAC array -> counters.
+// End-to-end test: bit-banged SPI master -> register file -> MAC array -> counters
+// + Hardware FOMO / Tiny-SSD Co-Processor MAC registers (0x30..0x37).
 // The hardware error sum is checked against an independent software model
 // of lane 0 (xorshift32 operands + AdaReMAC equations).
 module tb_core;
@@ -58,6 +59,7 @@ module tb_core;
 
     integer fails = 0;
     reg [31:0] ops, enr_hw; reg [39:0] err_hw;
+    reg signed [31:0] fomo_acc_hw;
     integer i, e_i, n_i, exp_err, exp_enr;
 
     task run_case(input [1:0] mode, input [1:0] thr);
@@ -103,6 +105,20 @@ module tb_core;
         run_case(2'd1, 2'd2);
         run_case(2'd1, 2'd1);
         run_case(2'd2, 2'd0);
+
+        // Verify FOMO / Tiny-SSD Hardware Co-Processor MAC registers (0x30..0x37) in Exact Mode 2
+        wr(7'h00, 8'h02); // Mode 2 (Exact)
+        wr(7'h32, 8'h00); // Clear fomo_acc = 0
+        wr(7'h30, 8'd40); wr(7'h31, 8'd20);  // +800
+        wr(7'h30, 8'd50); wr(7'h31, -8'sd10); // -500 -> total = +300
+        rd(7'h30); fomo_acc_hw[7:0]=rx;   rd(7'h31); fomo_acc_hw[15:8]=rx;
+        rd(7'h32); fomo_acc_hw[23:16]=rx; rd(7'h33); fomo_acc_hw[31:24]=rx;
+        if (fomo_acc_hw !== 32'sd300) begin
+            fails = fails + 1; $display("FOMO HW MAC mismatch: got %0d, exp 300", fomo_acc_hw);
+        end else begin
+            $display("FOMO HW MAC OK: acc=%0d", fomo_acc_hw);
+        end
+
         if (fails == 0) $display("TB_CORE PASS"); else $display("TB_CORE FAIL fails=%0d", fails);
         $finish;
     end
