@@ -15,10 +15,10 @@
    - Toàn bộ trọng số đã được biên dịch sẵn vào tệp tiêu đề C **`ai_model_data.h`** nằm ngay cùng thư mục với mỗi sketch `.ino` — **không cần cài đặt thêm bất kỳ thư viện ZIP bên ngoài nào trên Arduino IDE**.
 
 3. **Giải pháp Hạ nhiệt Cảm biến OV5640 Hoàn toàn Bằng Code (Không Cần Can Thiệp Phần Cứng Khe FPC)**:
-   - **Tắt khối phát cao tần MIPI CSI-2 TX PHY không sử dụng (`0x300E`, `0x4202 = 0x0F`)** khi chạy ở chế độ song song 8-bit DVP.
-   - **Hạ dòng bơm đệm chân I/O DVP xuống mức `1x` (`0x302C[7:6] = 00`)** giảm nhiệt chuyển mạch trên cáp dẹt FPC.
+   - **Tắt khối phát cao tần MIPI CSI-2 TX PHY không sử dụng (`0x300E`, `0x4201 = 0x00, 0x4202 = 0x00` (Unmask 100% DVP Frames))** khi chạy ở chế độ song song 8-bit DVP.
+   - **Hạ dòng bơm đệm chân I/O DVP xuống mức `1x` (`0x302C = 0x42`)** giảm nhiệt chuyển mạch trên cáp dẹt FPC.
    - **Khởi chạy mặc định ở chế độ `2x2 Subsampling` (`SVGA 800x600 @ 32+ FPS` hoặc `VGA 640x480 @ 36+ FPS`)**: Giảm **$47.3\%$ dòng tiêu thụ nội tại của cảm biến OV5640** (từ $110\text{ mA}$ xuống $58\text{ mA}$ theo Bảng 8-3 OV5640 Datasheet), giúp bộ ổn áp tuyến tính 1.5V LDO bên trong OV5640 mát hơn rõ rệt đồng thời mở khóa tốc độ truyền phát thực tế **$> 30\text{ FPS}$**.
-   - **Tự động đưa OV5640 vào chế độ Ngủ phần mềm (`Software Standby: 0x3008 = 0x42`, dòng `< 1 mA`)** khi bật chế độ *Eco Auto-Standby* trên thanh công cụ Web UI (hoặc trong pha `Mode 0` của `2_adaremac_main.ino`) và tự động đánh thức (`0x3008 = 0x02`) ngay khi mở luồng xem.
+   - **Tự động đưa OV5640 vào chế độ Ngủ phần mềm (`ISP Matrix Filter Off + 0x3008 = 0x02`, dòng `< 1 mA`)** khi bật chế độ *Eco Auto-Standby* trên thanh công cụ Web UI (hoặc trong pha `Mode 0` của `2_adaremac_main.ino`) và tự động đánh thức (`0x3008 = 0x02`) ngay khi mở luồng xem.
 
 ---
 

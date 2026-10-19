@@ -1222,20 +1222,9 @@ static void analyze_frame_fomo_pipeline(const uint8_t *jpeg_buf, size_t jpeg_len
 // Đưa OV5640 vào chế độ Ngủ tiết kiệm điện bằng phần mềm (Software Standby: 0x3008 = 0x42)
 // hoặc Đánh thức tức thì (Wakeup: 0x3008 = 0x02) mà không mất cấu hình thanh ghi SCCB!
 static void set_ov5640_software_standby(sensor_t *s, bool enable_standby) {
-    if (!s || s->id.PID != OV5640_PID || !s->set_reg || !s->get_reg) return;
-    if (enable_standby == s_ov5640_sleeping) return;
-
-    int sys_ctrl0 = s->get_reg(s, 0x3008, 0xFF);
-    if (sys_ctrl0 < 0) sys_ctrl0 = 0x02;
-
-    if (enable_standby) {
-        s->set_reg(s, 0x3008, 0xFF, (sys_ctrl0 | 0x40) & ~0x80); // Bit 6 = 1: Software power down (< 1mA)
-        s_ov5640_sleeping = true;
-    } else {
-        s->set_reg(s, 0x3008, 0xFF, sys_ctrl0 & ~0x40);          // Bit 6 = 0: Normal operating mode
-        s_ov5640_sleeping = false;
-        s_skip_frames = 2;
-    }
+    // Tuyệt đối không ghi 0x3008 = 0x42 khi GDMA LCD_CAM của ESP32-S3 đang chạy để tránh treo VSYNC/DMA!
+    (void)s; (void)enable_standby;
+    s_ov5640_sleeping = false;
 }
 
 // Áp dụng các thanh ghi cắt giảm nhiệt lượng phần mềm an toàn 100% cho OV5640:
@@ -1274,22 +1263,13 @@ static void configure_ov5640_cool_30fps(sensor_t *s, framesize_t fs, int jpeg_qu
     s->set_vflip(s, 1);
 
     if (s->id.PID == OV5640_PID && s->set_reg && s->get_reg) {
-        // (1) Tắt khối MIPI CSI-2 TX PHY dư thừa khi đang chạy DVP song song 8-bit (tiết kiệm ~30mW nhiệt)
-        int mipi_ctrl = s->get_reg(s, 0x300E, 0xFF);
-        if (mipi_ctrl >= 0) {
-            s->set_reg(s, 0x300E, 0xFF, (mipi_ctrl | 0x18) & ~0x04);
-        }
-        s->set_reg(s, 0x4202, 0xFF, 0x0F); // Đóng băng bộ điều khiển khung MIPI không dùng
+        // MỞ KHÓA LUỒNG STREAM DVP (xóa bộ che khung 0x4202=0x00 và đảm bảo 0x3008=0x02 Normal Mode)
+        s->set_reg(s, 0x3008, 0xFF, 0x02);
+        s->set_reg(s, 0x4201, 0xFF, 0x00);
+        s->set_reg(s, 0x4202, 0xFF, 0x00);
+        s->set_reg(s, 0x302C, 0xFF, 0x42);
 
-        // (2) Hạ dòng bơm đệm chân I/O DVP (PAD DRIVE CONTROL 0x302C):
-        //     Bits [7:6]: 00 = 1x (mát nhất cho VGA/SVGA), 01 = 2x (cho HD/FHD), 11 = 4x (nóng)
-        int pad_drv = s->get_reg(s, 0x302C, 0xFF);
-        if (pad_drv >= 0) {
-            uint8_t drv_bits = (fs <= FRAMESIZE_SVGA && s_thermal_mode != 2) ? 0x00 : 0x40;
-            s->set_reg(s, 0x302C, 0xFF, (pad_drv & 0x3F) | drv_bits);
-        }
-
-        // (3) Tắt bit 2 (Night mode frame drop) trong AEC CTRL00 (0x3A00) và khóa trần phơi sáng <= VTS - 4
+        // Chỉ tắt bit 2 (Night mode frame drop) trong AEC CTRL00 (0x3A00) và khóa trần phơi sáng <= VTS - 4
         int aec_ctrl = s->get_reg(s, 0x3A00, 0xFF);
         if (aec_ctrl >= 0) {
             s->set_reg(s, 0x3A00, 0xFF, aec_ctrl & ~0x04);
@@ -1330,15 +1310,7 @@ static void ai_continual_learning_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(35)); // Chạy FOMO ~25 Hz mượt mà trên Core 0
             s_ai_buf_state = 1;
         } else {
-            // Khi không có trình duyệt nào mở Stream:
-            // Nếu bật chế độ Eco-Standby (s_thermal_mode == 1) hoặc nhiệt độ ESP32-S3 > 74°C -> Ngủ OV5640 (< 1mA)!
-            if (s_thermal_mode == 1 || s_chip_temp_c > 74.0f) {
-                if (!s_ov5640_sleeping) {
-                    set_ov5640_software_standby(esp_camera_sensor_get(), true);
-                }
-                vTaskDelay(pdMS_TO_TICKS(250));
-                continue;
-            }
+            // Luôn duy trì luồng DMA liên tục giống bản V4 ổn định
 
             if (s_ov5640_sleeping) {
                 set_ov5640_software_standby(esp_camera_sensor_get(), false);

@@ -314,7 +314,7 @@ static void set_ov5640_standby(bool standby) {
     if (!s || s->id.PID != OV5640_PID || !s->set_reg || !s->get_reg) return;
     int r = s->get_reg(s, 0x3008, 0xFF);
     if (r < 0) r = 0x02;
-    if (standby) s->set_reg(s, 0x3008, 0xFF, (r | 0x40) & ~0x80);
+    if (standby) { (void)r; }
     else         s->set_reg(s, 0x3008, 0xFF, r & ~0x40);
 }
 
@@ -350,7 +350,7 @@ static bool camera_init_ov5640() {
         // Áp dụng làm mát phần mềm OV5640: Tắt MIPI PHY dư thừa (0x300E, 0x4202) & hạ dòng I/O Pad xuống 1x (0x302C)
         int mipi = s->get_reg(s, 0x300E, 0xFF);
         if (mipi >= 0) s->set_reg(s, 0x300E, 0xFF, (mipi | 0x18) & ~0x04);
-        s->set_reg(s, 0x4202, 0xFF, 0x0F);
+        s->set_reg(s, 0x4202, 0xFF, 0x00);
         int pad = s->get_reg(s, 0x302C, 0xFF);
         if (pad >= 0) s->set_reg(s, 0x302C, 0xFF, pad & 0x3F);
     }
